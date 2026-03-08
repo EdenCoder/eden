@@ -1,0 +1,26 @@
+{
+  "name": "@edenup/cli",
+  "version": "0.1.0",
+  "description": "CLI tool for the Eden orchestration framework",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "eden": "./bin/eden.js"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm",
+    "dev": "tsup src/index.ts --format esm --watch",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@edenup/core": "workspace:*",
+    "chalk": "^5.3.0",
+    "commander": "^12.0.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.0",
+    "typescript": "^5.5.0"
+  },
+  "license": "MIT"
+}
