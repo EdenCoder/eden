@@ -11,6 +11,12 @@
 //     guildId: process.env.DISCORD_GUILD_ID!,
 //   })
 
+import {
+  Client,
+  GatewayIntentBits,
+  Guild,
+} from 'discord.js'
+
 import type {
   MessagingAdapter,
   ChannelHandle,
@@ -35,26 +41,55 @@ export class DiscordAdapter implements MessagingAdapter {
   readonly name = 'discord' as const
 
   private config: DiscordAdapterConfig
-  // private client: Client — discord.js Client
-  // private guild: Guild — cached guild reference
+  private client: Client
+  private guild?: Guild
 
   constructor(config: DiscordAdapterConfig) {
     this.config = config
+    this.client = new Client({
+      intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.GuildMessageReactions,
+        GatewayIntentBits.MessageContent,
+      ],
+    })
   }
 
   async connect(): Promise<void> {
-    // TODO: Initialize discord.js Client with required intents
-    //   - GatewayIntentBits.Guilds
-    //   - GatewayIntentBits.GuildMessages
-    //   - GatewayIntentBits.GuildMessageReactions
-    //   - GatewayIntentBits.MessageContent
-    // TODO: Login with botToken
-    // TODO: Wait for 'ready' event
-    // TODO: Cache guild reference
+    return new Promise((resolve, reject) => {
+      this.client.once('clientReady', async () => {
+        try {
+          console.log(`Discord client ready as ${this.client.user?.tag}`)
+          this.guild = await this.client.guilds.fetch(this.config.guildId)
+          console.log(`Connected to Discord server: ${this.guild.name} (${this.guild.id})`)
+          resolve()
+        } catch (error) {
+          console.error(`Failed to fetch guild ${this.config.guildId}:`, error)
+          reject(error)
+        }
+      })
+
+      this.client.once('error', (error) => {
+        reject(error)
+      })
+
+      // Setup global message logger
+      this.client.on('messageCreate', (message) => {
+        if (message.guild?.id !== this.config.guildId) return
+
+        const channelName = message.channel.isDMBased() ? 'DM' : message.channel.name
+        const author = message.author.bot ? `[BOT] ${message.author.username}` : message.author.username
+        
+        console.log(`[Discord|#${channelName}] ${author}: ${message.content}`)
+      })
+
+      this.client.login(this.config.botToken).catch(reject)
+    })
   }
 
   async disconnect(): Promise<void> {
-    // TODO: Destroy discord.js Client
+    await this.client.destroy()
   }
 
   async setupServer(config: ServerLayout): Promise<ServerHandles> {
@@ -90,6 +125,7 @@ export class DiscordAdapter implements MessagingAdapter {
   }
 
   async sendMessage(channel: ChannelHandle, content: MessageContent): Promise<MessageHandle> {
+    console.log(`[Discord|Out|#${channel.name}] ${content.text}`)
     // TODO: Fetch channel, send message
     // TODO: If content.embeds, map to Discord MessageEmbed objects
     // TODO: If content.collapsible, wrap detail in spoiler tags

@@ -1,6 +1,6 @@
 // @edenup/core — Logger
 
-export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error' | 'success'
 
 export interface LogEntry {
   level: LogLevel
@@ -10,26 +10,38 @@ export interface LogEntry {
   data?: Record<string, unknown>
 }
 
+const isTTY = process.stdout.isTTY ?? false
+
+const c = {
+  dim: (s: string) => (isTTY ? `\x1b[2m${s}\x1b[0m` : s),
+  blue: (s: string) => (isTTY ? `\x1b[34m${s}\x1b[0m` : s),
+  yellow: (s: string) => (isTTY ? `\x1b[33m${s}\x1b[0m` : s),
+  red: (s: string) => (isTTY ? `\x1b[31m${s}\x1b[0m` : s),
+  green: (s: string) => (isTTY ? `\x1b[32m${s}\x1b[0m` : s),
+  cyan: (s: string) => (isTTY ? `\x1b[36m${s}\x1b[0m` : s),
+}
+
+function time(): string {
+  const d = new Date()
+  const h = String(d.getHours()).padStart(2, '0')
+  const m = String(d.getMinutes()).padStart(2, '0')
+  const s = String(d.getSeconds()).padStart(2, '0')
+  return c.dim(`${h}:${m}:${s}`)
+}
+
 const LOG_LEVEL_ORDER: Record<LogLevel, number> = {
   debug: 0,
   info: 1,
+  success: 1,
   warn: 2,
   error: 3,
 }
 
-const LOG_LEVEL_COLORS: Record<LogLevel, string> = {
-  debug: '\x1b[90m',  // gray
-  info: '\x1b[36m',   // cyan
-  warn: '\x1b[33m',   // yellow
-  error: '\x1b[31m',  // red
-}
-
-const RESET = '\x1b[0m'
-
 /**
  * Structured logger with scoped namespaces and level filtering.
- * Outputs timestamped, colored log lines to stderr (keeps stdout
- * clean for structured output / IPC).
+ * Simple, human-first logging.
+ * Format: HH:MM:SS LEVEL message
+ * Color in TTY, plain in pipes.
  */
 export class Logger {
   private scope: string
@@ -48,6 +60,10 @@ export class Logger {
     this.log('info', message, data)
   }
 
+  success(message: string, data?: Record<string, unknown>): void {
+    this.log('success', message, data)
+  }
+
   warn(message: string, data?: Record<string, unknown>): void {
     this.log('warn', message, data)
   }
@@ -56,17 +72,10 @@ export class Logger {
     this.log('error', message, data)
   }
 
-  /**
-   * Create a child logger with a nested scope.
-   * e.g. logger.child('budget') → scope becomes 'eden:budget'
-   */
   child(childScope: string): Logger {
     return new Logger(`${this.scope}:${childScope}`, this.minLevel)
   }
 
-  /**
-   * Set the minimum log level. Messages below this level are suppressed.
-   */
   setLevel(level: LogLevel): void {
     this.minLevel = level
   }
@@ -74,24 +83,38 @@ export class Logger {
   private log(level: LogLevel, message: string, data?: Record<string, unknown>): void {
     if (LOG_LEVEL_ORDER[level] < LOG_LEVEL_ORDER[this.minLevel]) return
 
-    const entry: LogEntry = {
-      level,
-      scope: this.scope,
-      message,
-      timestamp: new Date(),
-      data,
+    let levelTag = ''
+    switch (level) {
+      case 'debug':
+        levelTag = c.dim('DBG')
+        break
+      case 'info':
+        levelTag = c.blue('INF')
+        break
+      case 'success':
+        levelTag = c.green('OK ')
+        break
+      case 'warn':
+        levelTag = c.yellow('WRN')
+        break
+      case 'error':
+        levelTag = c.red('ERR')
+        break
     }
 
-    const color = LOG_LEVEL_COLORS[level]
-    const timestamp = entry.timestamp.toISOString()
-    const levelTag = level.toUpperCase().padEnd(5)
-    const prefix = `${color}${timestamp} [${levelTag}] ${this.scope}${RESET}`
+    const prefix = `${time()} ${levelTag}`
+    
+    // Add scope nicely if it's not the default 'eden'
+    const scopeTag = this.scope !== 'eden' ? c.dim(`[${this.scope}] `) : ''
 
-    const line = data
-      ? `${prefix} ${message} ${JSON.stringify(data)}`
-      : `${prefix} ${message}`
+    const dataStr = data ? ` ${c.dim(JSON.stringify(data))}` : ''
+    
+    const line = `${prefix} ${scopeTag}${message}${dataStr}`
 
-    // Write to stderr to keep stdout available for structured output
-    process.stderr.write(line + '\n')
+    if (level === 'error') {
+      console.error(line)
+    } else {
+      console.log(line)
+    }
   }
 }
