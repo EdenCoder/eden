@@ -126,10 +126,21 @@ export class DiscordAdapter implements MessagingAdapter {
 
   async sendMessage(channel: ChannelHandle, content: MessageContent): Promise<MessageHandle> {
     console.log(`[Discord|Out|#${channel.name}] ${content.text}`)
-    // TODO: Fetch channel, send message
-    // TODO: If content.embeds, map to Discord MessageEmbed objects
-    // TODO: If content.collapsible, wrap detail in spoiler tags
-    return { id: '', channelId: channel.id, platform: 'discord' }
+    if (!this.client || !this.client.isReady()) {
+      throw new Error('Discord client not ready')
+    }
+
+    const discordChannel = await this.client.channels.fetch(channel.id)
+    if (!discordChannel || !discordChannel.isTextBased()) {
+      throw new Error(`Channel ${channel.id} not found or not text-based`)
+    }
+
+    const sent = await discordChannel.send({
+      content: content.text,
+      // We can map embeds here later
+    })
+
+    return { id: sent.id, channelId: sent.channelId, platform: 'discord' }
   }
 
   async editMessage(handle: MessageHandle, content: MessageContent): Promise<void> {
@@ -173,16 +184,56 @@ export class DiscordAdapter implements MessagingAdapter {
   }
 
   onMessage(channel: ChannelHandle, callback: MessageCallback): Unsubscribe {
-    // TODO: Listen for 'messageCreate' events in this channel
-    // TODO: Map discord.js Message to IncomingMessage
-    return () => {}
+    const handler = (message: any) => {
+      if (message.guild?.id !== this.config.guildId) return
+      if (message.author.bot) return // Ignore other bots (and ourselves)
+      if (message.channelId !== channel.id) return
+
+      const mentions = Array.from(message.mentions.users.values()).map((u: any) => u.id)
+      
+      callback({
+        id: message.id,
+        channelId: message.channelId,
+        userId: message.author.id,
+        content: message.content,
+        mentions,
+        isThread: message.channel.isThread(),
+        threadId: message.channel.isThread() ? message.channel.id : undefined,
+      })
+    }
+
+    this.client.on('messageCreate', handler)
+    return () => this.client.off('messageCreate', handler)
   }
 
-  onMention(botId: string, callback: MentionCallback): Unsubscribe {
-    // TODO: Listen for 'messageCreate' events across all channels
-    // TODO: Filter to messages that @mention the bot
-    // TODO: This powers workspace channels + direct agent interaction
-    return () => {}
+  onMention(botName: string, callback: MentionCallback): Unsubscribe {
+    const handler = (message: any) => {
+      if (message.guild?.id !== this.config.guildId) return
+      if (message.author.bot) return
+
+      // Did they @mention the Discord bot user directly?
+      const mentionedBot = message.mentions.users.has(this.client.user?.id)
+      
+      // Did they type @botName ? (e.g. @parcae)
+      const mentionedText = new RegExp(`@${botName}\\b`, 'i').test(message.content)
+
+      if (!mentionedBot && !mentionedText) return
+
+      const mentions = Array.from(message.mentions.users.values()).map((u: any) => u.id)
+
+      callback({
+        id: message.id,
+        channelId: message.channelId,
+        userId: message.author.id,
+        content: message.content,
+        mentions,
+        isThread: message.channel.isThread(),
+        threadId: message.channel.isThread() ? message.channel.id : undefined,
+      })
+    }
+
+    this.client.on('messageCreate', handler)
+    return () => this.client.off('messageCreate', handler)
   }
 
   formatCollapsible(summary: string, detail: string): string {

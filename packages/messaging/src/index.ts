@@ -122,7 +122,7 @@ export interface MessagingAdapter {
 
   // Events
   onMessage(channel: ChannelHandle, callback: MessageCallback): Unsubscribe
-  onMention(botId: string, callback: MentionCallback): Unsubscribe
+  onMention(botName: string, callback: MentionCallback): Unsubscribe
 
   // Formatting
   formatCollapsible(summary: string, detail: string): string

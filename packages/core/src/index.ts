@@ -29,6 +29,8 @@ import { ContextBuilder } from './context.js'
 import { Logger } from './logger.js'
 import { discoverSkills, buildSkillsPrompt } from './skills.js'
 
+import { Orchestrator } from './orchestrator/index.js'
+
 export interface EdenOptions {
   config: EdenConfig
   messaging: MessagingAdapter[]
@@ -51,6 +53,7 @@ export class Eden {
   private approval: ApprovalManager
   private context: ContextBuilder
   private logger: Logger
+  private orchestrator: Orchestrator
 
   constructor(options: EdenOptions) {
     if (options.messaging.length === 0) {
@@ -70,6 +73,7 @@ export class Eden {
     this.approval = new ApprovalManager()
     this.context = new ContextBuilder()
     this.logger = new Logger('eden')
+    this.orchestrator = new Orchestrator(this.config, this.adapters)
   }
 
   async start(): Promise<void> {
@@ -149,8 +153,16 @@ export class Eden {
   }
 
   private async bootOrchestrator(): Promise<void> {
-    // TODO: Boot the orchestrator daemon with ToolLoopAgent from AI SDK
-    // TODO: Discover orchestrator skills, register loadSkill tool
+    // Boot the orchestrator daemon with ToolLoopAgent from AI SDK
+    await this.orchestrator.boot()
+    
+    // Wire up mention listeners from all adapters
+    for (const adapter of this.adapters) {
+      adapter.onMention('parcae', (message) => {
+        this.logger.info(`Orchestrator received mention in ${adapter.name}`)
+        this.orchestrator.handleMention(adapter.name, message)
+      })
+    }
   }
 
   private async bootExistingAgents(): Promise<void> {

@@ -6,7 +6,9 @@
 
 import { Daemon } from '../daemon.js'
 import type { EdenConfig, AgentConfig } from '../types.js'
-import type { MessagingAdapter } from '@edenup/messaging'
+import type { MessagingAdapter, IncomingMessage } from '@edenup/messaging'
+import { createOpenRouter } from '@openrouter/ai-sdk-provider'
+import { generateText } from 'ai'
 
 export class Orchestrator {
   private daemon: Daemon
@@ -92,6 +94,39 @@ export class Orchestrator {
 
   async stop(): Promise<void> {
     await this.daemon.stop()
+  }
+
+  async handleMention(adapterName: string, message: IncomingMessage): Promise<void> {
+    const adapter = this.daemon.adapters.find(a => a.name === adapterName)
+    if (!adapter) return
+
+    const openrouter = createOpenRouter({
+      apiKey: this.edenConfig.llm.openrouter.apiKey,
+    })
+
+    const modelName = this.daemon.config.router.default
+    console.log(`[Orchestrator] Processing mention using model ${modelName}...`)
+
+    try {
+      const { text } = await generateText({
+        model: openrouter(modelName),
+        system: `You are ${this.daemon.config.name}, the CTO and orchestrator of an AI agent team.
+Your personality: ${this.daemon.config.personality}
+Respond concisely to the user.`,
+        prompt: message.content,
+      })
+
+      await adapter.sendMessage(
+        { id: message.channelId, name: 'unknown', platform: adapterName },
+        { text }
+      )
+    } catch (error) {
+      console.error('[Orchestrator] Error generating response:', error)
+      await adapter.sendMessage(
+        { id: message.channelId, name: 'unknown', platform: adapterName },
+        { text: `Error: I encountered an issue processing that request. (${error})` }
+      )
+    }
   }
 
   // --- CTO Operations ---
