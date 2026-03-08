@@ -1,0 +1,28 @@
+{
+  "name": "@edenup/discord",
+  "version": "0.1.0",
+  "description": "Discord messaging adapter for Eden",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts",
+    "dev": "tsup src/index.ts --format esm --dts --watch",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@edenup/messaging": "workspace:*",
+    "discord.js": "^14.0.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.0",
+    "typescript": "^5.5.0"
+  },
+  "license": "MIT"
+}
