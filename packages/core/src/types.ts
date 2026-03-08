@@ -35,8 +35,7 @@ export interface MetaBudgetConfig {
 }
 
 export interface LLMConfig {
-  providers: Record<string, { apiKey: string }>
-  defaultProvider: string
+  openrouter: { apiKey: string }
 }
 
 export interface WorkspaceConfig {

@@ -24,9 +24,9 @@ export default {
 
   // Model routing
   router: {
-    default: 'claude-sonnet-4-20250514',
-    planning: 'claude-opus-4-20250115',
-    cheap: 'claude-haiku-4-5-20251001',
+    default: 'anthropic/claude-3.7-sonnet',
+    planning: 'anthropic/claude-3.7-sonnet:thinking',
+    cheap: 'anthropic/claude-3.5-haiku',
     routes: {},
   },
 

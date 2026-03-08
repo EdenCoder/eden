@@ -19,9 +19,8 @@
   },
   "dependencies": {
     "@edenup/messaging": "workspace:*",
+    "@openrouter/ai-sdk-provider": "latest",
     "ai": "latest",
-    "@ai-sdk/anthropic": "latest",
-    "@ai-sdk/openai": "latest",
     "vectordb": "latest",
     "zod": "^3.23.0"
   },
