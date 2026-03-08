@@ -4,10 +4,10 @@
 //
 // Usage:
 //
-//   import { Eden } from '@edenup/core'
+//   import { createEden } from '@edenup/core'
 //   import { DiscordAdapter } from '@edenup/discord'
 //
-//   const eden = new Eden({
+//   const eden = createEden({
 //     config: myConfig,
 //     messaging: [
 //       new DiscordAdapter({ botToken: '...', guildId: '...' }),
@@ -32,6 +32,10 @@ import { discoverSkills, buildSkillsPrompt } from './skills.js'
 export interface EdenOptions {
   config: EdenConfig
   messaging: MessagingAdapter[]
+}
+
+export function createEden(options: EdenOptions): Eden {
+  return new Eden(options)
 }
 
 export class Eden {
