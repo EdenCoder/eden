@@ -7,14 +7,22 @@
 import { Daemon } from '../daemon.js'
 import type { EdenConfig, AgentConfig } from '../types.js'
 import type { MessagingAdapter, IncomingMessage } from '@edenup/messaging'
+import type { WorkerAgent } from '../agent.js'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import { generateText } from 'ai'
+import { createManageAgentTools } from './tools/manage-agents.js'
 
 export class Orchestrator {
   private daemon: Daemon
   private edenConfig: EdenConfig
+  private agentTools: ReturnType<typeof createManageAgentTools> | null = null
 
-  constructor(config: EdenConfig, messaging: MessagingAdapter[]) {
+  constructor(
+    config: EdenConfig,
+    messaging: MessagingAdapter[],
+    private agents: Map<string, WorkerAgent>,
+    private onAgentBooted: (name: string, agent: WorkerAgent) => void,
+  ) {
     this.edenConfig = config
 
     const orchestratorAgentConfig: AgentConfig = {
@@ -31,9 +39,9 @@ export class Orchestrator {
         verboseCollapsible: true,
       },
       router: {
-        default: 'anthropic/claude-3.7-sonnet',
-        planning: 'anthropic/claude-3.7-sonnet:thinking',
-        cheap: 'anthropic/claude-3.5-haiku',
+        default: 'anthropic/claude-sonnet-4.6',
+        planning: 'anthropic/claude-opus-4.6',
+        cheap: 'anthropic/claude-haiku-4.5',
         routes: {
           'org-design': 'planning',
           'health-check': 'cheap',
@@ -65,29 +73,28 @@ export class Orchestrator {
         mcp: [],
       },
       skills: {
-        local: ['./skills'], // Orchestrator specific skills
-        global: ['skills'],  // Global shared skills
+        local: ['./skills'],
+        global: ['skills'],
       },
     }
 
     this.daemon = new Daemon(orchestratorAgentConfig, messaging, {
-      onStateChange: async (_from, _to) => {
-        // TODO: Post state change to #dashboard via primary adapter
-      },
-      onHeartbeat: async () => {
-        // TODO: Check all agent health, budgets, process tool requests
-      },
-      onError: async (_error) => {
-        // TODO: Log error, attempt self-recovery
-      },
-      onTask: async (_task) => {
-        // TODO: Process orchestrator task (org design, agent creation, etc.)
-        // Uses ToolLoopAgent from AI SDK under the hood
-      },
+      onStateChange: async (_from, _to) => {},
+      onHeartbeat: async () => {},
+      onError: async (_error) => {},
+      onTask: async (_task) => {},
     })
   }
 
   async boot(): Promise<void> {
+    // Create agent management tools — these are live and share the agents map
+    this.agentTools = createManageAgentTools(
+      this.edenConfig,
+      [...this.daemon.adapters],
+      this.agents,
+      this.onAgentBooted,
+    )
+
     await this.daemon.boot()
     await this.daemon.run()
   }
@@ -107,47 +114,42 @@ export class Orchestrator {
     const modelName = this.daemon.config.router.default
     console.log(`[Orchestrator] Processing mention using model ${modelName}...`)
 
+    // Build list of running agents for context
+    const agentNames = Array.from(this.agents.keys())
+    const agentList = agentNames.length > 0
+      ? `Currently running agents: ${agentNames.join(', ')}`
+      : 'No sub-agents are currently running.'
+
     try {
       const { text } = await generateText({
         model: openrouter(modelName),
-        system: `You are ${this.daemon.config.name}, the CTO and orchestrator of an AI agent team.
+        system: `You are ${this.daemon.config.name}, the CTO and orchestrator of an AI agent team called Eden.
 Your personality: ${this.daemon.config.personality}
-Respond concisely to the user.`,
+
+${agentList}
+
+You have tools to create, list, update, and remove sub-agents. When the user asks you to add a team member, use the createAgent tool. When they ask who's on the team, use listAgents. When they want to change an agent, use updateAgent. When they want to remove one, use removeAgent.
+
+Each agent you create will appear as a distinct persona in Discord that users can @mention to talk to directly.
+
+Respond concisely. Do not over-explain.`,
         prompt: message.content,
+        tools: this.agentTools!,
+        maxSteps: 5,
       })
 
-      await adapter.sendMessage(
-        { id: message.channelId, name: 'unknown', platform: adapterName },
-        { text }
-      )
+      if (text) {
+        await adapter.sendMessage(
+          { id: message.channelId, name: 'unknown', platform: adapterName },
+          { text }
+        )
+      }
     } catch (error) {
       console.error('[Orchestrator] Error generating response:', error)
       await adapter.sendMessage(
         { id: message.channelId, name: 'unknown', platform: adapterName },
-        { text: `Error: I encountered an issue processing that request. (${error})` }
+        { text: `Error: ${error}` }
       )
     }
-  }
-
-  // --- CTO Operations ---
-
-  async designOrg(goal: string): Promise<void> {
-    // TODO: Use planning model to decompose goal into agent roles
-    // TODO: Post proposal to #control for human approval
-    // TODO: Wait for approval
-    // TODO: Bootstrap agents
-    // TODO: Run kickoff meeting
-  }
-
-  async spawnAgent(config: AgentConfig): Promise<void> {
-    // TODO: Scaffold from template, write config, create channels, boot daemon
-  }
-
-  async killAgent(agentName: string, reason: string): Promise<void> {
-    // TODO: Stop daemon, archive channels, post to #control
-  }
-
-  async updateAgent(agentName: string, changes: Partial<AgentConfig>): Promise<void> {
-    // TODO: Apply changes, restart if needed
   }
 }

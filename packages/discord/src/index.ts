@@ -125,19 +125,59 @@ export class DiscordAdapter implements MessagingAdapter {
   }
 
   async sendMessage(channel: ChannelHandle, content: MessageContent): Promise<MessageHandle> {
-    console.log(`[Discord|Out|#${channel.name}] ${content.text}`)
+    const authorTag = content.author ? `[${content.author.name}] ` : ''
+    console.log(`[Discord|Out|#${channel.name}] ${authorTag}${content.text}`)
+    
     if (!this.client || !this.client.isReady()) {
       throw new Error('Discord client not ready')
     }
 
     const discordChannel = await this.client.channels.fetch(channel.id)
-    if (!discordChannel || !discordChannel.isTextBased()) {
-      throw new Error(`Channel ${channel.id} not found or not text-based`)
+    if (!discordChannel) {
+      throw new Error(`Channel ${channel.id} not found`)
     }
 
-    const sent = await discordChannel.send({
+    // Use Webhooks if a custom author is provided
+    if (content.author && 'fetchWebhooks' in discordChannel) {
+      let webhookChannel = discordChannel as any
+      let threadId: string | undefined = undefined
+
+      // Webhooks belong to the parent channel, but can send into threads
+      if ('isThread' in discordChannel && (discordChannel as any).isThread() && (discordChannel as any).parent) {
+        webhookChannel = (discordChannel as any).parent
+        threadId = discordChannel.id
+      }
+
+      try {
+        const webhooks = await webhookChannel.fetchWebhooks()
+        let webhook = webhooks.find((w: any) => w.owner?.id === this.client.user?.id)
+        
+        if (!webhook) {
+          webhook = await webhookChannel.createWebhook({
+            name: 'Eden Webhook',
+          })
+        }
+
+        const sent = await webhook.send({
+          content: content.text,
+          username: content.author.name,
+          avatarURL: content.author.avatarUrl,
+          threadId,
+        })
+
+        return { id: sent.id, channelId: channel.id, platform: 'discord' }
+      } catch (error) {
+        console.error('[Discord] Failed to send via webhook, falling back to normal send:', error)
+      }
+    }
+
+    // Fallback or normal send
+    if (!('send' in discordChannel)) {
+      throw new Error(`Channel ${channel.id} is not a text-based channel`)
+    }
+
+    const sent = await (discordChannel as any).send({
       content: content.text,
-      // We can map embeds here later
     })
 
     return { id: sent.id, channelId: sent.channelId, platform: 'discord' }

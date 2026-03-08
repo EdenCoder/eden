@@ -31,6 +31,10 @@ import { discoverSkills, buildSkillsPrompt } from './skills.js'
 
 import { Orchestrator } from './orchestrator/index.js'
 
+import { WorkerAgent } from './agent.js'
+import { readdir } from 'node:fs/promises'
+import { resolve, join } from 'node:path'
+
 export interface EdenOptions {
   config: EdenConfig
   messaging: MessagingAdapter[]
@@ -54,6 +58,7 @@ export class Eden {
   private context: ContextBuilder
   private logger: Logger
   private orchestrator: Orchestrator
+  private agents: Map<string, WorkerAgent> = new Map()
 
   constructor(options: EdenOptions) {
     if (options.messaging.length === 0) {
@@ -73,7 +78,21 @@ export class Eden {
     this.approval = new ApprovalManager()
     this.context = new ContextBuilder()
     this.logger = new Logger('eden')
-    this.orchestrator = new Orchestrator(this.config, this.adapters)
+    this.orchestrator = new Orchestrator(
+      this.config,
+      this.adapters,
+      this.agents,
+      (name, agent) => this.wireAgentMentions(name, agent),
+    )
+  }
+
+  private wireAgentMentions(name: string, agent: WorkerAgent): void {
+    for (const adapter of this.adapters) {
+      adapter.onMention(name, (message) => {
+        this.logger.info(`Agent ${name} received mention in ${adapter.name}`)
+        agent.handleMention(adapter.name, message)
+      })
+    }
   }
 
   async start(): Promise<void> {
@@ -166,8 +185,40 @@ export class Eden {
   }
 
   private async bootExistingAgents(): Promise<void> {
-    // TODO: Scan agents/ directory for existing agent configs
-    // TODO: Boot each agent as a ToolLoopAgent with loadSkill, passing adapters
+    const agentsPath = resolve(process.cwd(), this.config.paths.agents)
+    
+    let entries
+    try {
+      entries = await readdir(agentsPath, { withFileTypes: true })
+    } catch (e) {
+      this.logger.warn(`Could not read agents directory at ${agentsPath}. Skipping subagents.`)
+      return
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      
+      const configPath = join(agentsPath, entry.name, 'agent.config.ts')
+      
+      try {
+        // Use Node's dynamic import
+        const mod = await import(configPath)
+        const agentConfig = mod.default
+
+        if (!agentConfig || !agentConfig.name) {
+          throw new Error('Config missing or missing name')
+        }
+
+        const agent = new WorkerAgent(this.config, agentConfig, this.adapters)
+        await agent.boot()
+        
+        this.agents.set(agentConfig.name, agent)
+        this.wireAgentMentions(agentConfig.name, agent)
+        this.logger.success(`Booted local agent: ${agentConfig.name}`)
+      } catch (err: any) {
+        this.logger.error(`Failed to boot agent in ${entry.name}: ${err.message}`)
+      }
+    }
   }
 
   private async postControlPanel(_adapter: MessagingAdapter): Promise<void> {
@@ -177,6 +228,7 @@ export class Eden {
 
 // --- Re-exports ---
 export * from './types.js'
+export { WorkerAgent } from './agent.js'
 export { Daemon } from './daemon.js'
 export { ContextBuilder } from './context.js'
 export type { ContextAdapter, TaskDescription } from './context.js'

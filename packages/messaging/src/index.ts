@@ -42,6 +42,10 @@ export interface MessageContent {
   text: string
   embeds?: Embed[]
   collapsible?: boolean
+  author?: {
+    name: string
+    avatarUrl?: string
+  }
 }
 
 // --- Server Layout ---

@@ -37,6 +37,7 @@ export class Daemon {
   get state(): DaemonState { return this.ctx.state }
   get agentName(): string { return this.ctx.config.name }
   get adapters(): readonly MessagingAdapter[] { return this.ctx.messaging }
+  get config(): AgentConfig { return this.ctx.config }
 
   async boot(): Promise<void> {
     await this.transition('booting')
