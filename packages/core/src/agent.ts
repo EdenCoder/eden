@@ -8,9 +8,15 @@ import type { MessagingAdapter, IncomingMessage } from '@edenup/messaging'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import { generateText } from 'ai'
 
+interface ConversationMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
 export class WorkerAgent {
   private daemon: Daemon
   private edenConfig: EdenConfig
+  private history: Map<string, ConversationMessage[]> = new Map()
 
   constructor(
     config: EdenConfig,
@@ -62,29 +68,49 @@ export class WorkerAgent {
     const modelName = this.daemon.config.router.default
     console.log(`[Agent:${agentName}] Processing mention using model ${modelName}...`)
 
-    // Switch to thinking + typing
-    await adapter.removeReaction(msgHandle, '👀')
+    // Switch to thinking — add thinking FIRST, then remove eyes (no flicker)
     await adapter.addReaction(msgHandle, '🤔')
+    await adapter.removeReaction(msgHandle, '👀')
     await adapter.startTyping(channelHandle)
+
+    // Get or create conversation history for this channel
+    const channelKey = `${adapterName}:${message.channelId}`
+    if (!this.history.has(channelKey)) {
+      this.history.set(channelKey, [])
+    }
+    const history = this.history.get(channelKey)!
+
+    // Add the user's message to history
+    history.push({ role: 'user', content: message.content })
+
+    // Keep last 50 messages
+    if (history.length > 50) {
+      history.splice(0, history.length - 50)
+    }
 
     try {
       const { text } = await generateText({
         model: openrouter(modelName),
-        system: `You are ${agentName}.
+        system: `You are ${agentName}. ${this.daemon.config.description}
 Your personality: ${this.daemon.config.personality}
 Respond concisely to the user. Do not prefix your response with your name.`,
-        prompt: message.content,
+        messages: history.map(m => ({ role: m.role, content: m.content })),
       })
 
       // Done — remove thinking emoji
       await adapter.removeReaction(msgHandle, '🤔')
 
-      await adapter.sendMessage(channelHandle, { 
-        text,
-        author: {
-          name: agentName,
-        }
-      })
+      if (text) {
+        // Save assistant response to history
+        history.push({ role: 'assistant', content: text })
+
+        await adapter.sendMessage(channelHandle, { 
+          text,
+          author: {
+            name: agentName,
+          }
+        })
+      }
     } catch (error) {
       console.error(`[Agent:${agentName}] Error generating response:`, error)
       await adapter.removeReaction(msgHandle, '🤔')

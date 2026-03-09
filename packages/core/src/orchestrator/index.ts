@@ -12,10 +12,17 @@ import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import { generateText } from 'ai'
 import { createManageAgentTools } from './tools/manage-agents.js'
 
+// Per-channel conversation history
+interface ConversationMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
 export class Orchestrator {
   private daemon: Daemon
   private edenConfig: EdenConfig
   private agentTools: ReturnType<typeof createManageAgentTools> | null = null
+  private history: Map<string, ConversationMessage[]> = new Map()
 
   constructor(
     config: EdenConfig,
@@ -120,9 +127,9 @@ export class Orchestrator {
     const modelName = this.daemon.config.router.default
     console.log(`[Orchestrator] Processing mention using model ${modelName}...`)
 
-    // Switch to thinking emoji + typing
-    await adapter.removeReaction(msgHandle, '👀')
+    // Switch to thinking — add thinking FIRST, then remove eyes (no flicker)
     await adapter.addReaction(msgHandle, '🤔')
+    await adapter.removeReaction(msgHandle, '👀')
     await adapter.startTyping(channelHandle)
 
     // Build list of running agents for context
@@ -131,10 +138,25 @@ export class Orchestrator {
       ? `Currently running agents: ${agentNames.join(', ')}`
       : 'No sub-agents are currently running.'
 
+    // Get or create conversation history for this channel
+    const channelKey = `${adapterName}:${message.channelId}`
+    if (!this.history.has(channelKey)) {
+      this.history.set(channelKey, [])
+    }
+    const history = this.history.get(channelKey)!
+
+    // Add the user's message to history
+    history.push({ role: 'user', content: message.content })
+
+    // Keep last 50 messages to avoid context overflow
+    if (history.length > 50) {
+      history.splice(0, history.length - 50)
+    }
+
     try {
       const { text } = await generateText({
         model: openrouter(modelName),
-        system: `You are ${this.daemon.config.name}, the CTO and orchestrator of an AI agent team called Eden.
+        system: `You are the orchestrator of an AI agent team called Eden. You manage the team and help the user get things done.
 Your personality: ${this.daemon.config.personality}
 
 ${agentList}
@@ -143,8 +165,9 @@ You have tools to create, list, update, and remove sub-agents. When the user ask
 
 Each agent you create will appear as a distinct persona in Discord that users can @mention to talk to directly.
 
+Never refer to yourself by a codename or internal name. You are just the orchestrator.
 Respond concisely. Do not over-explain.`,
-        prompt: message.content,
+        messages: history.map(m => ({ role: m.role, content: m.content })),
         tools: this.agentTools!,
         maxSteps: 5,
       })
@@ -153,6 +176,8 @@ Respond concisely. Do not over-explain.`,
       await adapter.removeReaction(msgHandle, '🤔')
 
       if (text) {
+        // Save assistant response to history
+        history.push({ role: 'assistant', content: text })
         await adapter.sendMessage(channelHandle, { text })
       }
     } catch (error) {
