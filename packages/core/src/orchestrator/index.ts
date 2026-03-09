@@ -12,6 +12,8 @@ import type { Database } from '../db.js'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import { ToolLoopAgent } from 'ai'
 import { createManageAgentTools } from './tools/manage-agents.js'
+import { createManageTodoTools } from './tools/manage-todos.js'
+import { createManageProjectTools } from './tools/manage-projects.js'
 
 export class Orchestrator {
   private daemon: Daemon
@@ -94,13 +96,17 @@ export class Orchestrator {
       this.agentMd = 'You are the orchestrator of an AI agent team. You manage the team and help the user get things done. Respond concisely.'
     }
 
-    this.agentTools = createManageAgentTools(
+    const agentTools = createManageAgentTools(
       this.edenConfig,
       [...this.daemon.adapters],
       this.db,
       this.agents,
       this.onAgentBooted,
     )
+    const todoTools = createManageTodoTools(this.db)
+    const projectTools = createManageProjectTools()
+
+    this.agentTools = { ...agentTools, ...todoTools, ...projectTools }
 
     await this.daemon.boot()
     await this.daemon.run()

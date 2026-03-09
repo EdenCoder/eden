@@ -10,6 +10,7 @@ import type { Database } from './db.js'
 import type { MessagingAdapter, IncomingMessage } from '@edenup/messaging'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import { ToolLoopAgent } from 'ai'
+import { createAgentTodoTools } from './tools/agent-todos.js'
 
 export class WorkerAgent {
   private daemon: Daemon
@@ -81,9 +82,12 @@ export class WorkerAgent {
     }
 
     try {
+      const todoTools = createAgentTodoTools(this.db, agentName)
+
       const agent = new ToolLoopAgent({
         model: openrouter(modelName),
         instructions: this.agentMd,
+        tools: todoTools,
       })
 
       const result = await agent.generate({
