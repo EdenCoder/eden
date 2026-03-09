@@ -7,12 +7,14 @@ import { z } from 'zod'
 import { writeFile, mkdir, readdir, rm, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { AgentConfig, EdenConfig } from '../../types.js'
+import type { Database } from '../../db.js'
 import type { MessagingAdapter } from '@edenup/messaging'
 import { WorkerAgent } from '../../agent.js'
 
 export function createManageAgentTools(
   edenConfig: EdenConfig,
   adapters: MessagingAdapter[],
+  db: Database,
   agents: Map<string, WorkerAgent>,
   onAgentBooted: (name: string, agent: WorkerAgent) => void,
 ) {
@@ -91,7 +93,7 @@ export default ${JSON.stringify(agentConfig, null, 2)} satisfies AgentConfig
         await writeFile(join(agentDir, 'agent.config.ts'), configContent)
 
         // Boot the agent immediately
-        const agent = new WorkerAgent(edenConfig, agentConfig, adapters)
+        const agent = new WorkerAgent(edenConfig, agentConfig, adapters, db)
         await agent.boot()
         agents.set(name, agent)
         onAgentBooted(name, agent)
@@ -193,7 +195,7 @@ export default ${JSON.stringify(updated, null, 2)} satisfies AgentConfig
           agents.delete(name)
         }
 
-        const newAgent = new WorkerAgent(edenConfig, updated, adapters)
+        const newAgent = new WorkerAgent(edenConfig, updated, adapters, db)
         await newAgent.boot()
         agents.set(name, newAgent)
         onAgentBooted(name, newAgent)

@@ -81,6 +81,7 @@ export class Eden {
     this.orchestrator = new Orchestrator(
       this.config,
       this.adapters,
+      this.db,
       this.agents,
       (name, agent) => this.wireAgentMentions(name, agent),
     )
@@ -210,11 +211,12 @@ export class Eden {
           throw new Error('Config missing or missing name')
         }
 
-        const agent = new WorkerAgent(this.config, agentConfig, this.adapters)
+        const agent = new WorkerAgent(this.config, agentConfig, this.adapters, this.db)
         await agent.boot()
         
         this.agents.set(agentConfig.name, agent)
         this.wireAgentMentions(agentConfig.name, agent)
+        await this.db.registerAgent(agentConfig.name)
         this.logger.success(`Booted local agent: ${agentConfig.name}`)
       } catch (err: any) {
         this.logger.error(`Failed to boot agent in ${entry.name}: ${err.message}`)

@@ -1,41 +1,39 @@
 // ============================================================================
-// @edenup/core — Orchestrator (Codename: "Parcae")
+// @edenup/core — Orchestrator
 // ============================================================================
-// The CTO — designs orgs, hires agents, runs kickoff meetings,
-// monitors health/budget, processes tool requests, then gets out of the way.
 
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { Daemon } from '../daemon.js'
 import type { EdenConfig, AgentConfig } from '../types.js'
 import type { MessagingAdapter, IncomingMessage } from '@edenup/messaging'
 import type { WorkerAgent } from '../agent.js'
+import type { Database } from '../db.js'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import { generateText } from 'ai'
 import { createManageAgentTools } from './tools/manage-agents.js'
 
-// Per-channel conversation history
-interface ConversationMessage {
-  role: 'user' | 'assistant'
-  content: string
-}
-
 export class Orchestrator {
   private daemon: Daemon
   private edenConfig: EdenConfig
+  private db: Database
   private agentTools: ReturnType<typeof createManageAgentTools> | null = null
-  private history: Map<string, ConversationMessage[]> = new Map()
+  private agentMd: string = ''
 
   constructor(
     config: EdenConfig,
     messaging: MessagingAdapter[],
+    db: Database,
     private agents: Map<string, WorkerAgent>,
     private onAgentBooted: (name: string, agent: WorkerAgent) => void,
   ) {
     this.edenConfig = config
+    this.db = db
 
     const orchestratorAgentConfig: AgentConfig = {
       name: 'parcae',
-      description: 'The orchestrator — designs organizations, manages agents, monitors health',
-      personality: 'Strategic, decisive, speaks concisely, delegates effectively',
+      description: 'The orchestrator',
+      personality: '',
       messaging: {
         channelName: 'dashboard',
         verboseChannelName: 'verbose-parcae',
@@ -75,29 +73,31 @@ export class Orchestrator {
         timeoutMs: 60 * 60 * 1000,
         onTimeout: 'escalate',
       },
-      tools: {
-        builtin: ['filesystem', 'shell'],
-        mcp: [],
-      },
-      skills: {
-        local: ['./skills'],
-        global: ['skills'],
-      },
+      tools: { builtin: ['filesystem', 'shell'], mcp: [] },
+      skills: { local: ['./skills'], global: ['skills'] },
     }
 
     this.daemon = new Daemon(orchestratorAgentConfig, messaging, {
-      onStateChange: async (_from, _to) => {},
+      onStateChange: async () => {},
       onHeartbeat: async () => {},
-      onError: async (_error) => {},
-      onTask: async (_task) => {},
+      onError: async () => {},
+      onTask: async () => {},
     })
   }
 
   async boot(): Promise<void> {
-    // Create agent management tools — these are live and share the agents map
+    // Load /AGENT.md from project root — this is the orchestrator's persona
+    try {
+      this.agentMd = await readFile(join(process.cwd(), 'AGENT.md'), 'utf-8')
+    } catch {
+      console.warn('[Orchestrator] No AGENT.md found in project root, using defaults')
+      this.agentMd = 'You are the orchestrator of an AI agent team. You manage the team and help the user get things done. Respond concisely.'
+    }
+
     this.agentTools = createManageAgentTools(
       this.edenConfig,
       [...this.daemon.adapters],
+      this.db,
       this.agents,
       this.onAgentBooted,
     )
@@ -117,7 +117,6 @@ export class Orchestrator {
     const msgHandle = { id: message.id, channelId: message.channelId, platform: adapterName }
     const channelHandle = { id: message.channelId, name: 'unknown', platform: adapterName }
 
-    // Immediate feedback: eyes emoji
     await adapter.addReaction(msgHandle, '👀')
 
     const openrouter = createOpenRouter({
@@ -127,57 +126,39 @@ export class Orchestrator {
     const modelName = this.daemon.config.router.default
     console.log(`[Orchestrator] Processing mention using model ${modelName}...`)
 
-    // Switch to thinking — add thinking FIRST, then remove eyes (no flicker)
     await adapter.addReaction(msgHandle, '🤔')
     await adapter.removeReaction(msgHandle, '👀')
     await adapter.startTyping(channelHandle)
 
-    // Build list of running agents for context
+    // Build dynamic context
     const agentNames = Array.from(this.agents.keys())
     const agentList = agentNames.length > 0
       ? `Currently running agents: ${agentNames.join(', ')}`
       : 'No sub-agents are currently running.'
 
-    // Get or create conversation history for this channel
+    // Conversation history from DB
     const channelKey = `${adapterName}:${message.channelId}`
-    if (!this.history.has(channelKey)) {
-      this.history.set(channelKey, [])
-    }
-    const history = this.history.get(channelKey)!
+    await this.db.addMessage(channelKey, 'orchestrator', 'user', message.content)
+    const history = await this.db.getHistory(channelKey, 'orchestrator', 50)
 
-    // Add the user's message to history
-    history.push({ role: 'user', content: message.content })
+    // System prompt = AGENT.md + dynamic context
+    const system = `${this.agentMd}
 
-    // Keep last 50 messages to avoid context overflow
-    if (history.length > 50) {
-      history.splice(0, history.length - 50)
-    }
+${agentList}`.trim()
 
     try {
       const { text } = await generateText({
         model: openrouter(modelName),
-        system: `You are the orchestrator of an AI agent team called Eden. You manage the team and help the user get things done.
-Your personality: ${this.daemon.config.personality}
-
-${agentList}
-
-You have tools to create, list, update, and remove sub-agents. When the user asks you to add a team member, use the createAgent tool. When they ask who's on the team, use listAgents. When they want to change an agent, use updateAgent. When they want to remove one, use removeAgent.
-
-Each agent you create will appear as a distinct persona in Discord that users can @mention to talk to directly.
-
-Never refer to yourself by a codename or internal name. You are just the orchestrator.
-Respond concisely. Do not over-explain.`,
+        system,
         messages: history.map(m => ({ role: m.role, content: m.content })),
         tools: this.agentTools!,
         maxSteps: 5,
       })
 
-      // Done — remove thinking emoji
       await adapter.removeReaction(msgHandle, '🤔')
 
       if (text) {
-        // Save assistant response to history
-        history.push({ role: 'assistant', content: text })
+        await this.db.addMessage(channelKey, 'orchestrator', 'assistant', text)
         await adapter.sendMessage(channelHandle, { text })
       }
     } catch (error) {

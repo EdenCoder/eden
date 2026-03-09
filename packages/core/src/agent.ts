@@ -2,46 +2,48 @@
 // @edenup/core — Worker Agent
 // ============================================================================
 
+import { readFile } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
 import { Daemon } from './daemon.js'
 import type { EdenConfig, AgentConfig } from './types.js'
+import type { Database } from './db.js'
 import type { MessagingAdapter, IncomingMessage } from '@edenup/messaging'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import { generateText } from 'ai'
 
-interface ConversationMessage {
-  role: 'user' | 'assistant'
-  content: string
-}
-
 export class WorkerAgent {
   private daemon: Daemon
   private edenConfig: EdenConfig
-  private history: Map<string, ConversationMessage[]> = new Map()
+  private db: Database
+  private agentMd: string = ''
 
   constructor(
     config: EdenConfig,
     agentConfig: AgentConfig,
-    messaging: MessagingAdapter[]
+    messaging: MessagingAdapter[],
+    db: Database,
   ) {
     this.edenConfig = config
+    this.db = db
 
     this.daemon = new Daemon(agentConfig, messaging, {
-      onStateChange: async (_from, _to) => {
-        // TODO: Post state transition
-      },
-      onHeartbeat: async () => {
-        // TODO: Heartbeat
-      },
-      onError: async (_error) => {
-        // TODO: Log error
-      },
-      onTask: async (_task) => {
-        // TODO: Process agent tasks
-      },
+      onStateChange: async () => {},
+      onHeartbeat: async () => {},
+      onError: async () => {},
+      onTask: async () => {},
     })
   }
 
   async boot(): Promise<void> {
+    // Load AGENT.md from the agent's directory
+    const agentDir = join(resolve(process.cwd(), this.edenConfig.paths.agents), this.daemon.config.name)
+    try {
+      this.agentMd = await readFile(join(agentDir, 'AGENT.md'), 'utf-8')
+    } catch {
+      // No AGENT.md — that's fine, we'll use the config description/personality as fallback
+      this.agentMd = `You are ${this.daemon.config.name}. ${this.daemon.config.description}\n\n${this.daemon.config.personality}`
+    }
+
     await this.daemon.boot()
     await this.daemon.run()
   }
@@ -58,7 +60,6 @@ export class WorkerAgent {
     const msgHandle = { id: message.id, channelId: message.channelId, platform: adapterName }
     const channelHandle = { id: message.channelId, name: 'unknown', platform: adapterName }
 
-    // Immediate feedback: eyes emoji
     await adapter.addReaction(msgHandle, '👀')
 
     const openrouter = createOpenRouter({
@@ -68,47 +69,29 @@ export class WorkerAgent {
     const modelName = this.daemon.config.router.default
     console.log(`[Agent:${agentName}] Processing mention using model ${modelName}...`)
 
-    // Switch to thinking — add thinking FIRST, then remove eyes (no flicker)
     await adapter.addReaction(msgHandle, '🤔')
     await adapter.removeReaction(msgHandle, '👀')
     await adapter.startTyping(channelHandle)
 
-    // Get or create conversation history for this channel
+    // Conversation history from DB
     const channelKey = `${adapterName}:${message.channelId}`
-    if (!this.history.has(channelKey)) {
-      this.history.set(channelKey, [])
-    }
-    const history = this.history.get(channelKey)!
-
-    // Add the user's message to history
-    history.push({ role: 'user', content: message.content })
-
-    // Keep last 50 messages
-    if (history.length > 50) {
-      history.splice(0, history.length - 50)
-    }
+    await this.db.addMessage(channelKey, agentName, 'user', message.content)
+    const history = await this.db.getHistory(channelKey, agentName, 50)
 
     try {
       const { text } = await generateText({
         model: openrouter(modelName),
-        system: `You are ${agentName}. ${this.daemon.config.description}
-Your personality: ${this.daemon.config.personality}
-Respond concisely to the user. Do not prefix your response with your name.`,
+        system: this.agentMd,
         messages: history.map(m => ({ role: m.role, content: m.content })),
       })
 
-      // Done — remove thinking emoji
       await adapter.removeReaction(msgHandle, '🤔')
 
       if (text) {
-        // Save assistant response to history
-        history.push({ role: 'assistant', content: text })
-
-        await adapter.sendMessage(channelHandle, { 
+        await this.db.addMessage(channelKey, agentName, 'assistant', text)
+        await adapter.sendMessage(channelHandle, {
           text,
-          author: {
-            name: agentName,
-          }
+          author: { name: agentName },
         })
       }
     } catch (error) {
