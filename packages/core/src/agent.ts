@@ -9,7 +9,7 @@ import type { EdenConfig, AgentConfig } from './types.js'
 import type { Database } from './db.js'
 import type { MessagingAdapter, IncomingMessage } from '@edenup/messaging'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
-import { generateText } from 'ai'
+import { ToolLoopAgent } from 'ai'
 
 export class WorkerAgent {
   private daemon: Daemon
@@ -40,7 +40,6 @@ export class WorkerAgent {
     try {
       this.agentMd = await readFile(join(agentDir, 'AGENT.md'), 'utf-8')
     } catch {
-      // No AGENT.md — that's fine, we'll use the config description/personality as fallback
       this.agentMd = `You are ${this.daemon.config.name}. ${this.daemon.config.description}\n\n${this.daemon.config.personality}`
     }
 
@@ -77,21 +76,23 @@ export class WorkerAgent {
     const channelKey = `${adapterName}:${message.channelId}`
     await this.db.addMessage(channelKey, agentName, 'user', message.content)
     let history = await this.db.getHistory(channelKey, agentName, 50)
-
-    // Ensure we always have at least the current message
     if (history.length === 0) {
-      history = [{ role: 'user', content: message.content }]
+      history = [{ role: 'user' as const, content: message.content }]
     }
 
     try {
-      const { text } = await generateText({
+      const agent = new ToolLoopAgent({
         model: openrouter(modelName),
-        system: this.agentMd,
+        instructions: this.agentMd,
+      })
+
+      const result = await agent.generate({
         messages: history.map(m => ({ role: m.role, content: m.content })),
       })
 
       await adapter.removeReaction(msgHandle, '🤔')
 
+      const text = result.text
       if (text) {
         await this.db.addMessage(channelKey, agentName, 'assistant', text)
         await adapter.sendMessage(channelHandle, {

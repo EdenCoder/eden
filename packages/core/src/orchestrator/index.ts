@@ -10,7 +10,7 @@ import type { MessagingAdapter, IncomingMessage } from '@edenup/messaging'
 import type { WorkerAgent } from '../agent.js'
 import type { Database } from '../db.js'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
-import { generateText } from 'ai'
+import { ToolLoopAgent } from 'ai'
 import { createManageAgentTools } from './tools/manage-agents.js'
 
 export class Orchestrator {
@@ -86,7 +86,7 @@ export class Orchestrator {
   }
 
   async boot(): Promise<void> {
-    // Load /AGENT.md from project root — this is the orchestrator's persona
+    // Load /AGENT.md from project root
     try {
       this.agentMd = await readFile(join(process.cwd(), 'AGENT.md'), 'utf-8')
     } catch {
@@ -140,28 +140,27 @@ export class Orchestrator {
     const channelKey = `${adapterName}:${message.channelId}`
     await this.db.addMessage(channelKey, 'orchestrator', 'user', message.content)
     let history = await this.db.getHistory(channelKey, 'orchestrator', 50)
-
-    // Ensure we always have at least the current message
     if (history.length === 0) {
-      history = [{ role: 'user', content: message.content }]
+      history = [{ role: 'user' as const, content: message.content }]
     }
 
-    // System prompt = AGENT.md + dynamic context
-    const system = `${this.agentMd}
-
-${agentList}`.trim()
+    const system = `${this.agentMd}\n\n${agentList}`.trim()
 
     try {
-      const { text } = await generateText({
+      // Use ToolLoopAgent — handles tool call → result → continue loop properly
+      const agent = new ToolLoopAgent({
         model: openrouter(modelName),
-        system,
-        messages: history.map(m => ({ role: m.role, content: m.content })),
         tools: this.agentTools!,
-        maxSteps: 5,
+        instructions: system,
+      })
+
+      const result = await agent.generate({
+        messages: history.map(m => ({ role: m.role, content: m.content })),
       })
 
       await adapter.removeReaction(msgHandle, '🤔')
 
+      const text = result.text
       if (text) {
         await this.db.addMessage(channelKey, 'orchestrator', 'assistant', text)
         await adapter.sendMessage(channelHandle, { text })
