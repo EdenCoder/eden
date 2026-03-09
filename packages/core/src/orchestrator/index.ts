@@ -173,18 +173,12 @@ export class Orchestrator {
       try {
         for (const step of result.steps ?? []) {
           const calls = (step as any).toolCalls ?? []
-          const results = (step as any).toolResults ?? []
           for (const tc of calls) {
             console.log(`[Orchestrator] Tool called: ${tc.toolName}`)
           }
-          for (const tr of results) {
-            const val = typeof tr.result === 'string' ? tr.result.slice(0, 150) : JSON.stringify(tr.result).slice(0, 150)
-            console.log(`[Orchestrator] Tool result: ${val}`)
-          }
         }
-      } catch (logErr) {
-        // Don't let logging errors break the response
-        console.warn('[Orchestrator] Could not log step details:', logErr)
+      } catch {
+        // Logging is best-effort
       }
 
       await adapter.removeReaction(msgHandle, '🤔')
