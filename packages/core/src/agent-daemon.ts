@@ -110,19 +110,19 @@ export class AgentDaemon {
     for (const todo of pending) {
       // Idempotent — skip if a job is already running for this todo
       if (await this.db.isJobRunning('todo', todo.id)) {
-        this.logger.debug(`Skip ${todo.id} — job already running`)
+        this.logger.debug(`Skip "${todo.title}" (${todo.id}) — job already running`)
         continue
       }
 
       // Skip if dependencies not met
       if (!(await this.db.areDependenciesMet(todo.id))) {
-        this.logger.debug(`Skip ${todo.id} — deps not met`)
+        this.logger.debug(`Skip "${todo.title}" (${todo.id}) → ${todo.assignee} — deps not met`)
         continue
       }
 
       // Skip if agent not found
       if (!todo.assignee || !this.agents.has(todo.assignee)) {
-        this.logger.warn(`Todo ${todo.id} ("${todo.title}") — agent "${todo.assignee}" not found in [${Array.from(this.agents.keys()).join(', ')}]`)
+        this.logger.warn(`Skip "${todo.title}" (${todo.id}) — agent "${todo.assignee}" not found`)
         continue
       }
 
