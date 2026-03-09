@@ -1,0 +1,7 @@
+{
+  "name": "@edenup/skills",
+  "version": "0.1.0",
+  "description": "Default skills for Eden agents — shipped with the framework, installed to .agents/skills/ on boot",
+  "type": "module",
+  "license": "MIT"
+}

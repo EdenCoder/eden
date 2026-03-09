@@ -50,7 +50,6 @@ export interface InboxConfig {
 
 export interface PathsConfig {
   agents: string
-  skills: string
   data: string
 }
 

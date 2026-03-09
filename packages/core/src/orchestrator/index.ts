@@ -4,30 +4,33 @@
 
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { Daemon } from '../daemon.js'
 import type { EdenConfig, AgentConfig } from '../types.js'
 import type { MessagingAdapter, IncomingMessage } from '@edenup/messaging'
 import type { WorkerAgent } from '../agent.js'
 import type { Database } from '../db.js'
+import type { SkillMetadata } from '../skills.js'
+import { buildSkillsPrompt, loadSkillTool } from '../skills.js'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
-import { ToolLoopAgent } from 'ai'
-import { createManageAgentTools } from './tools/manage-agents.js'
-import { createManageTodoTools } from './tools/manage-todos.js'
-import { createManageProjectTools } from './tools/manage-projects.js'
+import { ToolLoopAgent, tool } from 'ai'
+import { z } from 'zod'
+
+const exec = promisify(execFile)
 
 export class Orchestrator {
   private daemon: Daemon
   private edenConfig: EdenConfig
   private db: Database
-  private agentTools: ReturnType<typeof createManageAgentTools> | null = null
   private agentMd: string = ''
+  private skills: SkillMetadata[] = []
 
   constructor(
     config: EdenConfig,
     messaging: MessagingAdapter[],
     db: Database,
     private agents: Map<string, WorkerAgent>,
-    private onAgentBooted: (name: string, agent: WorkerAgent) => void,
   ) {
     this.edenConfig = config
     this.db = db
@@ -49,34 +52,22 @@ export class Orchestrator {
         default: 'anthropic/claude-sonnet-4.6',
         planning: 'anthropic/claude-opus-4.6',
         cheap: 'anthropic/claude-haiku-4.5',
-        routes: {
-          'org-design': 'planning',
-          'health-check': 'cheap',
-          'status-update': 'cheap',
-          'tool-research': 'default',
-        },
+        routes: {},
       },
       budget: {
-        maxPerDay: 10.0,
-        maxPerTask: 2.0,
-        maxLifetime: 200.0,
-        warnAt: 0.8,
-        onExhausted: 'escalate',
+        maxPerDay: 10.0, maxPerTask: 2.0, maxLifetime: 200.0,
+        warnAt: 0.8, onExhausted: 'escalate',
       },
       daemon: {
-        mode: 'event',
-        heartbeatIntervalMs: 15_000,
-        maxConsecutiveErrors: 3,
-        restartDelayMs: 5_000,
+        mode: 'event', heartbeatIntervalMs: 15_000,
+        maxConsecutiveErrors: 3, restartDelayMs: 5_000,
       },
       approval: {
-        alwaysApprove: [],
-        approveAbove: { costUsd: 5.0 },
-        timeoutMs: 60 * 60 * 1000,
-        onTimeout: 'escalate',
+        alwaysApprove: [], approveAbove: { costUsd: 5.0 },
+        timeoutMs: 60 * 60 * 1000, onTimeout: 'escalate',
       },
-      tools: { builtin: ['filesystem', 'shell'], mcp: [] },
-      skills: { local: ['./skills'], global: ['skills'] },
+      tools: { builtin: [], mcp: [] },
+      skills: { local: [], global: [] },
     }
 
     this.daemon = new Daemon(orchestratorAgentConfig, messaging, {
@@ -87,26 +78,15 @@ export class Orchestrator {
     })
   }
 
-  async boot(): Promise<void> {
+  async boot(skills: SkillMetadata[]): Promise<void> {
+    this.skills = skills
+
     // Load /AGENT.md from project root
     try {
       this.agentMd = await readFile(join(process.cwd(), 'AGENT.md'), 'utf-8')
     } catch {
-      console.warn('[Orchestrator] No AGENT.md found in project root, using defaults')
       this.agentMd = 'You are the orchestrator of an AI agent team. You manage the team and help the user get things done. Respond concisely.'
     }
-
-    const agentTools = createManageAgentTools(
-      this.edenConfig,
-      [...this.daemon.adapters],
-      this.db,
-      this.agents,
-      this.onAgentBooted,
-    )
-    const todoTools = createManageTodoTools(this.db)
-    const projectTools = createManageProjectTools()
-
-    this.agentTools = { ...agentTools, ...todoTools, ...projectTools }
 
     await this.daemon.boot()
     await this.daemon.run()
@@ -125,12 +105,10 @@ export class Orchestrator {
 
     await adapter.addReaction(msgHandle, '👀')
 
-    const openrouter = createOpenRouter({
-      apiKey: this.edenConfig.llm.openrouter.apiKey,
-    })
-
+    const openrouter = createOpenRouter({ apiKey: this.edenConfig.llm.openrouter.apiKey })
     const modelName = this.daemon.config.router.default
-    console.log(`[Orchestrator] Processing mention using model ${modelName}...`)
+
+    console.log(`[Orchestrator] Processing mention using ${modelName}...`)
 
     await adapter.addReaction(msgHandle, '🤔')
     await adapter.removeReaction(msgHandle, '👀')
@@ -142,7 +120,7 @@ export class Orchestrator {
       ? `Currently running agents: ${agentNames.join(', ')}`
       : 'No sub-agents are currently running.'
 
-    // Conversation history from DB
+    // Conversation history
     const channelKey = `${adapterName}:${message.channelId}`
     await this.db.addMessage(channelKey, 'orchestrator', 'user', message.content)
     let history = await this.db.getHistory(channelKey, 'orchestrator', 50)
@@ -150,36 +128,62 @@ export class Orchestrator {
       history = [{ role: 'user' as const, content: message.content }]
     }
 
-    const system = `${this.agentMd}\n\n${agentList}`.trim()
+    // System prompt = AGENT.md + agent list + available skills
+    const skillsPrompt = buildSkillsPrompt(this.skills)
+    const system = `${this.agentMd}\n\n${agentList}\n\n${skillsPrompt}`.trim()
+
+    // AI SDK tools: loadSkill + bash + readFile
+    const tools = {
+      loadSkill: loadSkillTool(this.skills),
+      bash: tool({
+        description: 'Execute a bash command in the project root. Use for running skill scripts, opencode, or any shell command.',
+        parameters: z.object({
+          command: z.string().describe('The bash command to execute'),
+        }),
+        execute: async ({ command }) => {
+          console.log(`[Orchestrator:bash] ${command}`)
+          try {
+            const { stdout, stderr } = await exec('bash', ['-c', command], {
+              cwd: process.cwd(),
+              timeout: 120_000,
+              maxBuffer: 1024 * 1024 * 10,
+            })
+            const output = stdout.trim() || stderr.trim() || '(no output)'
+            console.log(`[Orchestrator:bash] Done: ${output.slice(0, 150)}`)
+            return output
+          } catch (error: any) {
+            const msg = error.stderr || error.message || String(error)
+            console.error(`[Orchestrator:bash] Error: ${msg.slice(0, 200)}`)
+            return `Error: ${msg}`
+          }
+        },
+      }),
+      readFile: tool({
+        description: 'Read a file from the filesystem.',
+        parameters: z.object({
+          path: z.string().describe('Path to the file, relative to project root'),
+        }),
+        execute: async ({ path }) => {
+          try {
+            const content = await readFile(join(process.cwd(), path), 'utf-8')
+            return content
+          } catch (error: any) {
+            return `Error reading ${path}: ${error.message}`
+          }
+        },
+      }),
+    }
 
     try {
-      const toolNames = this.agentTools ? Object.keys(this.agentTools) : []
-      console.log(`[Orchestrator] Tools available: ${toolNames.join(', ')}`)
-      console.log(`[Orchestrator] History length: ${history.length} messages`)
-
       const agent = new ToolLoopAgent({
         model: openrouter(modelName),
-        tools: this.agentTools!,
+        tools,
         instructions: system,
       })
 
       const result = await agent.generate({
         messages: history.map(m => ({ role: m.role, content: m.content })),
       })
-
-      // Log what happened
-      const textPreview = result.text ? result.text.slice(0, 80) + '...' : '(none)'
-      console.log(`[Orchestrator] Steps: ${result.steps?.length ?? 0}, Text: ${textPreview}`)
-      try {
-        for (const step of result.steps ?? []) {
-          const calls = (step as any).toolCalls ?? []
-          for (const tc of calls) {
-            console.log(`[Orchestrator] Tool called: ${tc.toolName}`)
-          }
-        }
-      } catch {
-        // Logging is best-effort
-      }
 
       await adapter.removeReaction(msgHandle, '🤔')
 
@@ -189,7 +193,7 @@ export class Orchestrator {
         await adapter.sendMessage(channelHandle, { text })
       }
     } catch (error) {
-      console.error('[Orchestrator] Error generating response:', error)
+      console.error('[Orchestrator] Error:', error)
       await adapter.removeReaction(msgHandle, '🤔')
       await adapter.addReaction(msgHandle, '❌')
       await adapter.sendMessage(channelHandle, { text: `Error: ${error}` })

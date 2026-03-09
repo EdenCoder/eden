@@ -10,6 +10,8 @@
 
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { tool } from 'ai'
+import { z } from 'zod'
 
 // --- Types ---
 
@@ -86,22 +88,15 @@ ${skillsList}
 `.trim()
 }
 
-// --- loadSkill Tool (for AI SDK ToolLoopAgent) ---
+// --- loadSkill Tool (AI SDK tool()) ---
 
 export function loadSkillTool(skills: SkillMetadata[]) {
-  return {
-    description: 'Load a skill to get specialized instructions for a task',
-    parameters: {
-      type: 'object' as const,
-      properties: {
-        name: {
-          type: 'string' as const,
-          description: 'The skill name to load',
-        },
-      },
-      required: ['name'] as const,
-    },
-    execute: async ({ name }: { name: string }) => {
+  return tool({
+    description: 'Load a skill to get specialized instructions for a task. Returns the full skill content and the skill directory path for accessing bundled scripts/references.',
+    parameters: z.object({
+      name: z.string().describe('The skill name to load'),
+    }),
+    execute: async ({ name }) => {
       const skill = skills.find(
         (s) => s.name.toLowerCase() === name.toLowerCase(),
       )
@@ -119,7 +114,7 @@ export function loadSkillTool(skills: SkillMetadata[]) {
         content: body,
       }
     },
-  }
+  })
 }
 
 // --- Frontmatter Parsing ---
