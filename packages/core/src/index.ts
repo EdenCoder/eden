@@ -10,6 +10,7 @@ import { discoverSkills, buildSkillsPrompt, loadSkillTool } from './skills.js'
 import type { SkillMetadata } from './skills.js'
 import { Orchestrator } from './orchestrator/index.js'
 import { WorkerAgent } from './agent.js'
+import { AgentDaemon } from './agent-daemon.js'
 import { readdir, cp, mkdir, access } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -33,6 +34,7 @@ export class Eden {
   private orchestrator: Orchestrator
   private agents: Map<string, WorkerAgent> = new Map()
   private skills: SkillMetadata[] = []
+  private daemon: AgentDaemon
 
   constructor(options: EdenOptions) {
     if (options.messaging.length === 0) {
@@ -49,6 +51,12 @@ export class Eden {
       this.adapters,
       this.db,
       this.agents,
+    )
+    this.daemon = new AgentDaemon(
+      this.db,
+      this.agents,
+      this.orchestrator,
+      this.adapters,
     )
   }
 
@@ -105,11 +113,16 @@ export class Eden {
     await Promise.all(this.adapters.map(a => this.postControlPanel(a)))
     this.logger.info('Control panels posted')
 
+    // 9. Start the agent daemon (todo dispatch + cron + idle check)
+    this.daemon.start()
+    this.logger.info('Agent daemon running')
+
     this.logger.info('Eden is running. Waiting for instructions.')
   }
 
   async stop(): Promise<void> {
     this.logger.info('Eden shutting down...')
+    this.daemon.stop()
     await Promise.all(this.adapters.map(async (adapter) => {
       await adapter.disconnect()
       this.logger.info(`Messaging adapter disconnected: ${adapter.name}`)
@@ -218,3 +231,4 @@ export { Logger } from './logger.js'
 export { Database } from './db.js'
 export { discoverSkills, buildSkillsPrompt, loadSkillTool } from './skills.js'
 export type { SkillMetadata } from './skills.js'
+export { AgentDaemon } from './agent-daemon.js'

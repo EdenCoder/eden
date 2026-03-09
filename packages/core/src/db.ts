@@ -58,6 +58,18 @@ export class Database {
       name: 'system', state: 'stopped',
       seen: new Date().toISOString(), booted: new Date().toISOString(),
     }])
+
+    await this.ensureTable('crons', [{
+      id: 'init', name: '', schedule: '', assignee: '',
+      description: '', enabled: 'false', lastran: '', nextrun: '',
+      created: new Date().toISOString(),
+    }])
+
+    await this.ensureTable('jobs', [{
+      id: 'init', type: '', ref: '', assignee: '',
+      status: 'done', result: '', error: '',
+      started: new Date().toISOString(), finished: new Date().toISOString(),
+    }])
   }
 
   async disconnect(): Promise<void> {
@@ -285,6 +297,100 @@ export class Database {
     } catch {
       return []
     }
+  }
+
+  // =========================================================================
+  // Crons
+  // =========================================================================
+
+  async addCron(cron: {
+    name: string
+    schedule: string
+    assignee: string
+    description: string
+  }): Promise<string> {
+    const table = await this.getTable('crons')
+    const id = crypto.randomUUID().slice(0, 8)
+    await table.add([{
+      id, name: cron.name, schedule: cron.schedule,
+      assignee: cron.assignee, description: cron.description,
+      enabled: 'true', lastran: '', nextrun: '',
+      created: new Date().toISOString(),
+    }])
+    return id
+  }
+
+  async getCrons(enabledOnly = true): Promise<any[]> {
+    const table = await this.getTable('crons')
+    try {
+      const filter = enabledOnly ? "id != 'init' AND enabled = 'true'" : "id != 'init'"
+      return await table.where(filter).execute()
+    } catch { return [] }
+  }
+
+  async updateCronLastRan(id: string, nextrun: string): Promise<void> {
+    const table = await this.getTable('crons')
+    try {
+      const existing = await table.where(`id = '${id}'`).execute()
+      if (existing.length === 0) return
+      const record = existing[0]
+      await table.delete(`id = '${id}'`)
+      await table.add([{ ...record, lastran: new Date().toISOString(), nextrun }])
+    } catch {}
+  }
+
+  async deleteCron(id: string): Promise<void> {
+    const table = await this.getTable('crons')
+    try { await table.delete(`id = '${id}'`) } catch {}
+  }
+
+  // =========================================================================
+  // Jobs — tracks what's been dispatched, prevents duplicate runs
+  // =========================================================================
+
+  async addJob(job: {
+    type: 'todo' | 'cron' | 'orchestrator'
+    ref: string         // todo ID, cron ID, or 'review'
+    assignee: string
+  }): Promise<string> {
+    const table = await this.getTable('jobs')
+    const id = crypto.randomUUID().slice(0, 8)
+    await table.add([{
+      id, type: job.type, ref: job.ref, assignee: job.assignee,
+      status: 'running', result: '', error: '',
+      started: new Date().toISOString(), finished: '',
+    }])
+    return id
+  }
+
+  async isJobRunning(type: string, ref: string): Promise<boolean> {
+    const table = await this.getTable('jobs')
+    try {
+      const rows = await table.where(`type = '${type}' AND ref = '${ref}' AND status = 'running'`).execute()
+      return rows.length > 0
+    } catch { return false }
+  }
+
+  async completeJob(id: string, result: string): Promise<void> {
+    const table = await this.getTable('jobs')
+    try {
+      const existing = await table.where(`id = '${id}'`).execute()
+      if (existing.length === 0) return
+      const record = existing[0]
+      await table.delete(`id = '${id}'`)
+      await table.add([{ ...record, status: 'done', result, finished: new Date().toISOString() }])
+    } catch {}
+  }
+
+  async failJob(id: string, error: string): Promise<void> {
+    const table = await this.getTable('jobs')
+    try {
+      const existing = await table.where(`id = '${id}'`).execute()
+      if (existing.length === 0) return
+      const record = existing[0]
+      await table.delete(`id = '${id}'`)
+      await table.add([{ ...record, status: 'failed', error, finished: new Date().toISOString() }])
+    } catch {}
   }
 
   // =========================================================================

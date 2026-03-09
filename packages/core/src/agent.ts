@@ -85,6 +85,48 @@ export class WorkerAgent {
     await this.daemon.stop()
   }
 
+  /**
+   * Work on a todo autonomously. Called by the TodoDaemon.
+   * Returns the result text when done.
+   */
+  async workOnTodo(todo: { id: string; title: string; description: string; project?: string }): Promise<string> {
+    const agentName = this.daemon.config.name
+    console.log(`[Agent:${agentName}] Working on todo: ${todo.title} (${todo.id})`)
+
+    const openrouter = createOpenRouter({ apiKey: this.edenConfig.llm.openrouter.apiKey })
+    const modelName = this.daemon.config.router.default
+
+    const skillsPrompt = buildSkillsPrompt(this.allSkills)
+    const system = `${this.agentMd}\n\n${skillsPrompt}`.trim()
+
+    const taskPrompt = [
+      `You have been assigned a task:`,
+      ``,
+      `**${todo.title}**`,
+      ``,
+      todo.description,
+      ``,
+      todo.project ? `Project: ${todo.project}` : '',
+      ``,
+      `Complete this task thoroughly. Use your skills and tools as needed.`,
+      `When you're done, provide your complete deliverable as your final response.`,
+    ].filter(Boolean).join('\n')
+
+    const tools = this.buildTools(agentName)
+
+    const agent = new ToolLoopAgent({
+      model: openrouter(modelName),
+      tools,
+      instructions: system,
+    })
+
+    const result = await agent.generate({
+      messages: [{ role: 'user' as const, content: taskPrompt }],
+    })
+
+    return result.text || '(No output produced)'
+  }
+
   async handleMention(adapterName: string, message: IncomingMessage): Promise<void> {
     const adapter = this.daemon.adapters.find(a => a.name === adapterName)
     if (!adapter) return
@@ -116,8 +158,38 @@ export class WorkerAgent {
     const skillsPrompt = buildSkillsPrompt(this.allSkills)
     const system = `${this.agentMd}\n\n${skillsPrompt}`.trim()
 
-    // AI SDK tools: loadSkill + bash + readFile
-    const tools = {
+    const tools = this.buildTools(agentName)
+
+    try {
+      const agent = new ToolLoopAgent({
+        model: openrouter(modelName),
+        tools,
+        instructions: system,
+      })
+
+      const result = await agent.generate({
+        messages: history.map(m => ({ role: m.role, content: m.content })),
+      })
+
+      await adapter.removeReaction(msgHandle, '🤔')
+
+      const text = result.text
+      if (text) {
+        await this.db.addMessage(channelKey, agentName, 'assistant', text)
+        await adapter.sendMessage(channelHandle, {
+          text,
+          author: { name: agentName },
+        })
+      }
+    } catch (error) {
+      console.error(`[Agent:${agentName}] Error:`, error)
+      await adapter.removeReaction(msgHandle, '🤔')
+      await adapter.addReaction(msgHandle, '❌')
+    }
+  }
+
+  private buildTools(agentName: string) {
+    return {
       loadSkill: loadSkillTool(this.allSkills),
       bash: tool({
         description: 'Execute a bash command in the project root. Use for running skill scripts, opencode, or any shell command.',
@@ -153,33 +225,6 @@ export class WorkerAgent {
           }
         },
       }),
-    }
-
-    try {
-      const agent = new ToolLoopAgent({
-        model: openrouter(modelName),
-        tools,
-        instructions: system,
-      })
-
-      const result = await agent.generate({
-        messages: history.map(m => ({ role: m.role, content: m.content })),
-      })
-
-      await adapter.removeReaction(msgHandle, '🤔')
-
-      const text = result.text
-      if (text) {
-        await this.db.addMessage(channelKey, agentName, 'assistant', text)
-        await adapter.sendMessage(channelHandle, {
-          text,
-          author: { name: agentName },
-        })
-      }
-    } catch (error) {
-      console.error(`[Agent:${agentName}] Error:`, error)
-      await adapter.removeReaction(msgHandle, '🤔')
-      await adapter.addReaction(msgHandle, '❌')
     }
   }
 }
