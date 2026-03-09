@@ -31,6 +31,8 @@ export function createManageAgentTools(
         budgetPerDay: z.number().default(3).describe('Daily spend cap in USD.'),
       }),
       execute: async ({ name, description, personality, model, budgetPerDay }) => {
+        console.log(`[Tool:createAgent] Creating agent "${name}"...`)
+        
         if (agents.has(name)) {
           return { success: false, error: `Agent "${name}" already exists.` }
         }
@@ -93,12 +95,17 @@ export default ${JSON.stringify(agentConfig, null, 2)} satisfies AgentConfig
         await writeFile(join(agentDir, 'agent.config.ts'), configContent)
 
         // Boot the agent immediately
-        const agent = new WorkerAgent(edenConfig, agentConfig, adapters, db)
-        await agent.boot()
-        agents.set(name, agent)
-        onAgentBooted(name, agent)
-
-        return { success: true, message: `Agent "${name}" created and booted. Users can now @${name} in Discord.` }
+        try {
+          const agent = new WorkerAgent(edenConfig, agentConfig, adapters, db)
+          await agent.boot()
+          agents.set(name, agent)
+          onAgentBooted(name, agent)
+          console.log(`[Tool:createAgent] Agent "${name}" booted successfully.`)
+          return { success: true, message: `Agent "${name}" created and booted. Users can now @${name} in Discord.` }
+        } catch (bootError) {
+          console.error(`[Tool:createAgent] Failed to boot agent "${name}":`, bootError)
+          return { success: false, error: `Agent config written but failed to boot: ${bootError}` }
+        }
       },
     }),
 
@@ -106,6 +113,7 @@ export default ${JSON.stringify(agentConfig, null, 2)} satisfies AgentConfig
       description: 'List all currently running sub-agents with their name, description, personality, model, and budget.',
       parameters: z.object({}),
       execute: async () => {
+        console.log(`[Tool:listAgents] Listing agents (${agents.size} in memory)...`)
         if (agents.size === 0) {
           return { agents: [], message: 'No sub-agents running.' }
         }

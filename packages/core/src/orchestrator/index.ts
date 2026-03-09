@@ -153,7 +153,10 @@ export class Orchestrator {
     const system = `${this.agentMd}\n\n${agentList}`.trim()
 
     try {
-      // Use ToolLoopAgent — handles tool call → result → continue loop properly
+      const toolNames = this.agentTools ? Object.keys(this.agentTools) : []
+      console.log(`[Orchestrator] Tools available: ${toolNames.join(', ')}`)
+      console.log(`[Orchestrator] History length: ${history.length} messages`)
+
       const agent = new ToolLoopAgent({
         model: openrouter(modelName),
         tools: this.agentTools!,
@@ -163,6 +166,26 @@ export class Orchestrator {
       const result = await agent.generate({
         messages: history.map(m => ({ role: m.role, content: m.content })),
       })
+
+      // Log what happened
+      const textPreview = result.text ? result.text.slice(0, 80) + '...' : '(none)'
+      console.log(`[Orchestrator] Steps: ${result.steps?.length ?? 0}, Text: ${textPreview}`)
+      try {
+        for (const step of result.steps ?? []) {
+          const calls = (step as any).toolCalls ?? []
+          const results = (step as any).toolResults ?? []
+          for (const tc of calls) {
+            console.log(`[Orchestrator] Tool called: ${tc.toolName}`)
+          }
+          for (const tr of results) {
+            const val = typeof tr.result === 'string' ? tr.result.slice(0, 150) : JSON.stringify(tr.result).slice(0, 150)
+            console.log(`[Orchestrator] Tool result: ${val}`)
+          }
+        }
+      } catch (logErr) {
+        // Don't let logging errors break the response
+        console.warn('[Orchestrator] Could not log step details:', logErr)
+      }
 
       await adapter.removeReaction(msgHandle, '🤔')
 
