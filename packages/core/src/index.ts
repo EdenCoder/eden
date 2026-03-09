@@ -175,12 +175,13 @@ export class Eden {
     // Boot the orchestrator daemon with ToolLoopAgent from AI SDK
     await this.orchestrator.boot()
     
-    // Wire up mention listeners from all adapters
+    // Wire up mention listeners — orchestrator gets isOrchestrator=true
+    // so it responds to direct bot-user @mentions as well as text @parcae
     for (const adapter of this.adapters) {
       adapter.onMention('parcae', (message) => {
         this.logger.info(`Orchestrator received mention in ${adapter.name}`)
         this.orchestrator.handleMention(adapter.name, message)
-      })
+      }, true)
     }
   }
 

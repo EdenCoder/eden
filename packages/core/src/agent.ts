@@ -48,34 +48,47 @@ export class WorkerAgent {
     const adapter = this.daemon.adapters.find(a => a.name === adapterName)
     if (!adapter) return
 
+    const agentName = this.daemon.config.name
+    const msgHandle = { id: message.id, channelId: message.channelId, platform: adapterName }
+    const channelHandle = { id: message.channelId, name: 'unknown', platform: adapterName }
+
+    // Immediate feedback: eyes emoji
+    await adapter.addReaction(msgHandle, '👀')
+
     const openrouter = createOpenRouter({
       apiKey: this.edenConfig.llm.openrouter.apiKey,
     })
 
     const modelName = this.daemon.config.router.default
-    console.log(`[Agent:${this.daemon.config.name}] Processing mention using model ${modelName}...`)
+    console.log(`[Agent:${agentName}] Processing mention using model ${modelName}...`)
+
+    // Switch to thinking + typing
+    await adapter.removeReaction(msgHandle, '👀')
+    await adapter.addReaction(msgHandle, '🤔')
+    await adapter.startTyping(channelHandle)
 
     try {
       const { text } = await generateText({
         model: openrouter(modelName),
-        system: `You are ${this.daemon.config.name}.
+        system: `You are ${agentName}.
 Your personality: ${this.daemon.config.personality}
 Respond concisely to the user. Do not prefix your response with your name.`,
         prompt: message.content,
       })
 
-      await adapter.sendMessage(
-        { id: message.channelId, name: 'unknown', platform: adapterName },
-        { 
-          text,
-          author: {
-            name: this.daemon.config.name,
-            // We can add custom avatarURLs for agents in the config later!
-          }
+      // Done — remove thinking emoji
+      await adapter.removeReaction(msgHandle, '🤔')
+
+      await adapter.sendMessage(channelHandle, { 
+        text,
+        author: {
+          name: agentName,
         }
-      )
+      })
     } catch (error) {
-      console.error(`[Agent:${this.daemon.config.name}] Error generating response:`, error)
+      console.error(`[Agent:${agentName}] Error generating response:`, error)
+      await adapter.removeReaction(msgHandle, '🤔')
+      await adapter.addReaction(msgHandle, '❌')
     }
   }
 }

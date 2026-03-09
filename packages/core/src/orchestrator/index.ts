@@ -107,12 +107,23 @@ export class Orchestrator {
     const adapter = this.daemon.adapters.find(a => a.name === adapterName)
     if (!adapter) return
 
+    const msgHandle = { id: message.id, channelId: message.channelId, platform: adapterName }
+    const channelHandle = { id: message.channelId, name: 'unknown', platform: adapterName }
+
+    // Immediate feedback: eyes emoji
+    await adapter.addReaction(msgHandle, '👀')
+
     const openrouter = createOpenRouter({
       apiKey: this.edenConfig.llm.openrouter.apiKey,
     })
 
     const modelName = this.daemon.config.router.default
     console.log(`[Orchestrator] Processing mention using model ${modelName}...`)
+
+    // Switch to thinking emoji + typing
+    await adapter.removeReaction(msgHandle, '👀')
+    await adapter.addReaction(msgHandle, '🤔')
+    await adapter.startTyping(channelHandle)
 
     // Build list of running agents for context
     const agentNames = Array.from(this.agents.keys())
@@ -138,18 +149,17 @@ Respond concisely. Do not over-explain.`,
         maxSteps: 5,
       })
 
+      // Done — remove thinking emoji
+      await adapter.removeReaction(msgHandle, '🤔')
+
       if (text) {
-        await adapter.sendMessage(
-          { id: message.channelId, name: 'unknown', platform: adapterName },
-          { text }
-        )
+        await adapter.sendMessage(channelHandle, { text })
       }
     } catch (error) {
       console.error('[Orchestrator] Error generating response:', error)
-      await adapter.sendMessage(
-        { id: message.channelId, name: 'unknown', platform: adapterName },
-        { text: `Error: ${error}` }
-      )
+      await adapter.removeReaction(msgHandle, '🤔')
+      await adapter.addReaction(msgHandle, '❌')
+      await adapter.sendMessage(channelHandle, { text: `Error: ${error}` })
     }
   }
 }

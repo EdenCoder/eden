@@ -122,11 +122,20 @@ export interface MessagingAdapter {
 
   // Reactions
   addReaction(message: MessageHandle, emoji: string): Promise<void>
+  removeReaction(message: MessageHandle, emoji: string): Promise<void>
   onReaction(message: MessageHandle, callback: ReactionCallback): Unsubscribe
+
+  // Typing indicator
+  startTyping(channel: ChannelHandle): Promise<void>
 
   // Events
   onMessage(channel: ChannelHandle, callback: MessageCallback): Unsubscribe
-  onMention(botName: string, callback: MentionCallback): Unsubscribe
+  /**
+   * Listen for @mentions of a specific agent name.
+   * isOrchestrator=true means this handler also fires when the Discord bot user is @mentioned directly.
+   * isOrchestrator=false means only text-based @name mentions trigger the callback.
+   */
+  onMention(botName: string, callback: MentionCallback, isOrchestrator?: boolean): Unsubscribe
 
   // Formatting
   formatCollapsible(summary: string, detail: string): string

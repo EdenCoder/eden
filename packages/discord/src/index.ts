@@ -214,7 +214,39 @@ export class DiscordAdapter implements MessagingAdapter {
   }
 
   async addReaction(message: MessageHandle, emoji: string): Promise<void> {
-    // TODO: Fetch message, add reaction
+    try {
+      const channel = await this.client.channels.fetch(message.channelId)
+      if (!channel || !('messages' in channel)) return
+      const msg = await (channel as any).messages.fetch(message.id)
+      await msg.react(emoji)
+    } catch (error) {
+      console.error('[Discord] Failed to add reaction:', error)
+    }
+  }
+
+  async removeReaction(message: MessageHandle, emoji: string): Promise<void> {
+    try {
+      const channel = await this.client.channels.fetch(message.channelId)
+      if (!channel || !('messages' in channel)) return
+      const msg = await (channel as any).messages.fetch(message.id)
+      const reaction = msg.reactions.cache.find((r: any) => r.emoji.name === emoji)
+      if (reaction) {
+        await reaction.users.remove(this.client.user?.id)
+      }
+    } catch (error) {
+      console.error('[Discord] Failed to remove reaction:', error)
+    }
+  }
+
+  async startTyping(channel: ChannelHandle): Promise<void> {
+    try {
+      const discordChannel = await this.client.channels.fetch(channel.id)
+      if (discordChannel && 'sendTyping' in discordChannel) {
+        await (discordChannel as any).sendTyping()
+      }
+    } catch (error) {
+      console.error('[Discord] Failed to start typing:', error)
+    }
   }
 
   onReaction(message: MessageHandle, callback: ReactionCallback): Unsubscribe {
@@ -246,18 +278,24 @@ export class DiscordAdapter implements MessagingAdapter {
     return () => this.client.off('messageCreate', handler)
   }
 
-  onMention(botName: string, callback: MentionCallback): Unsubscribe {
+  onMention(botName: string, callback: MentionCallback, isOrchestrator: boolean = false): Unsubscribe {
     const handler = (message: any) => {
       if (message.guild?.id !== this.config.guildId) return
       if (message.author.bot) return
 
       // Did they @mention the Discord bot user directly?
-      const mentionedBot = message.mentions.users.has(this.client.user?.id)
+      const mentionedBotUser = message.mentions.users.has(this.client.user?.id)
       
-      // Did they type @botName ? (e.g. @parcae)
-      const mentionedText = new RegExp(`@${botName}\\b`, 'i').test(message.content)
+      // Did they type @botName in the message text? (e.g. @nova, @parcae)
+      const mentionedByName = new RegExp(`@${botName}\\b`, 'i').test(message.content)
 
-      if (!mentionedBot && !mentionedText) return
+      // Orchestrator: responds to direct bot-user @mentions OR text @parcae
+      // Regular agents: respond ONLY to text @name mentions (not bot-user @mentions)
+      if (isOrchestrator) {
+        if (!mentionedBotUser && !mentionedByName) return
+      } else {
+        if (!mentionedByName) return
+      }
 
       const mentions = Array.from(message.mentions.users.values()).map((u: any) => u.id)
 
