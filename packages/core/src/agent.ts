@@ -76,7 +76,12 @@ export class WorkerAgent {
     // Conversation history from DB
     const channelKey = `${adapterName}:${message.channelId}`
     await this.db.addMessage(channelKey, agentName, 'user', message.content)
-    const history = await this.db.getHistory(channelKey, agentName, 50)
+    let history = await this.db.getHistory(channelKey, agentName, 50)
+
+    // Ensure we always have at least the current message
+    if (history.length === 0) {
+      history = [{ role: 'user', content: message.content }]
+    }
 
     try {
       const { text } = await generateText({

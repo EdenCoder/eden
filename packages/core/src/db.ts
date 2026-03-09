@@ -104,7 +104,7 @@ export class Database {
     const table = await this.getTable('conversations')
     try {
       const results = await table
-        .filter(`channelKey = '${channelKey}' AND scope = '${scope}' AND role != 'system'`)
+        .where(`channelKey = '${channelKey}' AND scope = '${scope}' AND role != 'system'`)
         .limit(limit)
         .execute()
 
@@ -150,7 +150,7 @@ export class Database {
       if (filter?.assignee) filterStr += ` AND assignee = '${filter.assignee}'`
       if (filter?.status) filterStr += ` AND status = '${filter.status}'`
 
-      return await table.filter(filterStr).execute()
+      return await table.where(filterStr).execute()
     } catch {
       return []
     }
@@ -160,7 +160,7 @@ export class Database {
     // LanceDB doesn't have native UPDATE — we delete and re-add
     const table = await this.getTable('todos')
     try {
-      const existing = await table.filter(`id = '${id}'`).execute()
+      const existing = await table.where(`id = '${id}'`).execute()
       if (existing.length === 0) return
 
       const record = existing[0]
@@ -200,7 +200,7 @@ export class Database {
       let filterStr = `timestamp >= '${today}'`
       if (agentName) filterStr += ` AND agentName = '${agentName}'`
 
-      const records = await table.filter(filterStr).execute()
+      const records = await table.where(filterStr).execute()
       return records.reduce((sum: number, r: any) => sum + (r.costUsd || 0), 0)
     } catch {
       return 0
@@ -224,7 +224,7 @@ export class Database {
   async updateAgentHeartbeat(name: string): Promise<void> {
     const table = await this.getTable('agent_registry')
     try {
-      const existing = await table.filter(`name = '${name}'`).execute()
+      const existing = await table.where(`name = '${name}'`).execute()
       if (existing.length === 0) return
       const record = existing[0]
       await table.delete(`name = '${name}'`)
@@ -240,7 +240,7 @@ export class Database {
   async getRegisteredAgents(): Promise<Array<{ name: string; state: string; lastSeen: string }>> {
     const table = await this.getTable('agent_registry')
     try {
-      return (await table.filter("name != 'system'").execute()).map((r: any) => ({
+      return (await table.where("name != 'system'").execute()).map((r: any) => ({
         name: r.name,
         state: r.state,
         lastSeen: r.lastSeen,

@@ -69,7 +69,7 @@ export class Eden {
     this.adapters = options.messaging
     this.primary = this.adapters[0]
 
-    this.db = new Database({ path: `${options.config.paths.data}/eden.lance` })
+    this.db = new Database({ path: `${options.config.paths.data}/lance` })
     this.health = new HealthMonitor()
     this.budget = new BudgetTracker()
     this.meetings = new MeetingManager()
