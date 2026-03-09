@@ -1,6 +1,8 @@
 // ============================================================================
 // @edenup/core — Database (LanceDB)
 // ============================================================================
+// All column names are lowercase (no camelCase) because LanceDB/DataFusion
+// normalizes identifiers to lowercase in SQL WHERE clauses.
 
 import { connect as lanceConnect } from 'vectordb'
 import { mkdir } from 'node:fs/promises'
@@ -29,33 +31,32 @@ export class Database {
     this.connection = await lanceConnect(this.config.path)
     this._connected = true
 
-    // Initialize all tables
     await this.ensureTable('conversations', [{
-      id: 'init', channelKey: '', scope: '', role: 'system',
-      content: 'Database initialized', timestamp: new Date().toISOString(),
+      id: 'init', channel: '', scope: '', role: 'system',
+      content: 'Database initialized', ts: new Date().toISOString(),
     }])
 
     await this.ensureTable('todos', [{
       id: 'init', title: '', description: '', assignee: '', status: 'done',
-      priority: 'low', project: '', dependsOn: '', createdBy: 'system',
-      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-      completedAt: new Date().toISOString(),
+      priority: 'low', project: '', depends: '', creator: 'system',
+      created: new Date().toISOString(), updated: new Date().toISOString(),
+      completed: new Date().toISOString(),
     }])
 
-    await this.ensureTable('todo_comments', [{
-      id: 'init', todoId: '', author: '', content: '',
-      type: 'system', timestamp: new Date().toISOString(),
+    await this.ensureTable('comments', [{
+      id: 'init', todo: '', author: '', content: '',
+      type: 'system', ts: new Date().toISOString(),
     }])
 
-    await this.ensureTable('budget_records', [{
-      id: 'init', agentName: 'system', model: '',
-      inputTokens: 0, outputTokens: 0, costUsd: 0,
-      timestamp: new Date().toISOString(),
+    await this.ensureTable('costs', [{
+      id: 'init', agent: 'system', model: '',
+      input: 0, output: 0, cost: 0,
+      ts: new Date().toISOString(),
     }])
 
-    await this.ensureTable('agent_registry', [{
+    await this.ensureTable('agents', [{
       name: 'system', state: 'stopped',
-      lastSeen: new Date().toISOString(), bootedAt: new Date().toISOString(),
+      seen: new Date().toISOString(), booted: new Date().toISOString(),
     }])
   }
 
@@ -73,23 +74,23 @@ export class Database {
   // Conversations
   // =========================================================================
 
-  async addMessage(channelKey: string, scope: string, role: 'user' | 'assistant', content: string): Promise<void> {
+  async addMessage(channel: string, scope: string, role: 'user' | 'assistant', content: string): Promise<void> {
     const table = await this.getTable('conversations')
     await table.add([{
-      id: crypto.randomUUID(), channelKey, scope, role, content,
-      timestamp: new Date().toISOString(),
+      id: crypto.randomUUID(), channel, scope, role, content,
+      ts: new Date().toISOString(),
     }])
   }
 
-  async getHistory(channelKey: string, scope: string, limit: number = 50): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> {
+  async getHistory(channel: string, scope: string, limit: number = 50): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> {
     const table = await this.getTable('conversations')
     try {
       const results = await table
-        .where(`channelKey = '${channelKey}' AND scope = '${scope}' AND role != 'system'`)
+        .where(`channel = '${channel}' AND scope = '${scope}' AND role != 'system'`)
         .limit(limit)
         .execute()
       return results
-        .sort((a: any, b: any) => a.timestamp.localeCompare(b.timestamp))
+        .sort((a: any, b: any) => a.ts.localeCompare(b.ts))
         .map((r: any) => ({ role: r.role, content: r.content }))
     } catch {
       return []
@@ -97,7 +98,7 @@ export class Database {
   }
 
   // =========================================================================
-  // Todos — with dependencies, projects, and comment/escalate flow
+  // Todos
   // =========================================================================
 
   async addTodo(todo: {
@@ -107,10 +108,10 @@ export class Database {
     priority: 'low' | 'medium' | 'high' | 'critical'
     createdBy: string
     project?: string
-    dependsOn?: string[]  // todo IDs that must complete before this one
+    dependsOn?: string[]
   }): Promise<string> {
     const table = await this.getTable('todos')
-    const id = crypto.randomUUID().slice(0, 8) // Short IDs for readability
+    const id = crypto.randomUUID().slice(0, 8)
     await table.add([{
       id,
       title: todo.title,
@@ -119,11 +120,11 @@ export class Database {
       status: 'pending',
       priority: todo.priority,
       project: todo.project ?? '',
-      dependsOn: (todo.dependsOn ?? []).join(','), // CSV in LanceDB
-      createdBy: todo.createdBy,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      completedAt: '',
+      depends: (todo.dependsOn ?? []).join(','),
+      creator: todo.createdBy,
+      created: new Date().toISOString(),
+      updated: new Date().toISOString(),
+      completed: '',
     }])
     return id
   }
@@ -141,11 +142,11 @@ export class Database {
   async getTodos(filter?: { assignee?: string; status?: string; project?: string }): Promise<any[]> {
     const table = await this.getTable('todos')
     try {
-      let filterStr = "id != 'init'"
-      if (filter?.assignee) filterStr += ` AND assignee = '${filter.assignee}'`
-      if (filter?.status) filterStr += ` AND status = '${filter.status}'`
-      if (filter?.project) filterStr += ` AND project = '${filter.project}'`
-      return await table.where(filterStr).execute()
+      let f = "id != 'init'"
+      if (filter?.assignee) f += ` AND assignee = '${filter.assignee}'`
+      if (filter?.status) f += ` AND status = '${filter.status}'`
+      if (filter?.project) f += ` AND project = '${filter.project}'`
+      return await table.where(f).execute()
     } catch {
       return []
     }
@@ -167,8 +168,8 @@ export class Database {
       await table.add([{
         ...record,
         ...updates,
-        updatedAt: new Date().toISOString(),
-        completedAt: updates.status === 'done' ? new Date().toISOString() : record.completedAt,
+        updated: new Date().toISOString(),
+        completed: updates.status === 'done' ? new Date().toISOString() : record.completed,
       }])
     } catch {}
   }
@@ -178,14 +179,11 @@ export class Database {
     try { await table.delete(`id = '${id}'`) } catch {}
   }
 
-  // Check if a todo's dependencies are all complete
   async areDependenciesMet(id: string): Promise<boolean> {
     const todo = await this.getTodo(id)
-    if (!todo || !todo.dependsOn) return true
-
-    const depIds = todo.dependsOn.split(',').filter(Boolean)
+    if (!todo || !todo.depends) return true
+    const depIds = todo.depends.split(',').filter(Boolean)
     if (depIds.length === 0) return true
-
     for (const depId of depIds) {
       const dep = await this.getTodo(depId)
       if (!dep || dep.status !== 'done') return false
@@ -194,54 +192,56 @@ export class Database {
   }
 
   // =========================================================================
-  // Todo Comments — agents comment on todos, which escalates to orchestrator
+  // Comments
   // =========================================================================
 
   async addComment(todoId: string, author: string, content: string, type: 'comment' | 'escalation' | 'resolution' = 'comment'): Promise<string> {
-    const table = await this.getTable('todo_comments')
+    const table = await this.getTable('comments')
     const id = crypto.randomUUID().slice(0, 8)
     await table.add([{
-      id, todoId, author, content, type,
-      timestamp: new Date().toISOString(),
+      id, todo: todoId, author, content, type,
+      ts: new Date().toISOString(),
     }])
     return id
   }
 
-  async getComments(todoId: string): Promise<Array<{ id: string; author: string; content: string; type: string; timestamp: string }>> {
-    const table = await this.getTable('todo_comments')
+  async getComments(todoId: string): Promise<Array<{ id: string; author: string; content: string; type: string; ts: string }>> {
+    const table = await this.getTable('comments')
     try {
-      const results = await table.where(`todoId = '${todoId}'`).execute()
+      const results = await table.where(`todo = '${todoId}'`).execute()
       return results
-        .sort((a: any, b: any) => a.timestamp.localeCompare(b.timestamp))
-        .map((r: any) => ({ id: r.id, author: r.author, content: r.content, type: r.type, timestamp: r.timestamp }))
+        .sort((a: any, b: any) => a.ts.localeCompare(b.ts))
+        .map((r: any) => ({ id: r.id, author: r.author, content: r.content, type: r.type, ts: r.ts }))
     } catch {
       return []
     }
   }
 
   // =========================================================================
-  // Budget Records
+  // Costs
   // =========================================================================
 
   async recordCost(record: {
     agentName: string; model: string;
     inputTokens: number; outputTokens: number; costUsd: number
   }): Promise<void> {
-    const table = await this.getTable('budget_records')
+    const table = await this.getTable('costs')
     await table.add([{
-      id: crypto.randomUUID(), ...record,
-      timestamp: new Date().toISOString(),
+      id: crypto.randomUUID(),
+      agent: record.agentName, model: record.model,
+      input: record.inputTokens, output: record.outputTokens, cost: record.costUsd,
+      ts: new Date().toISOString(),
     }])
   }
 
   async getTotalCostToday(agentName?: string): Promise<number> {
-    const table = await this.getTable('budget_records')
+    const table = await this.getTable('costs')
     try {
       const today = new Date().toISOString().split('T')[0]
-      let filterStr = `timestamp >= '${today}'`
-      if (agentName) filterStr += ` AND agentName = '${agentName}'`
-      const records = await table.where(filterStr).execute()
-      return records.reduce((sum: number, r: any) => sum + (r.costUsd || 0), 0)
+      let f = `ts >= '${today}'`
+      if (agentName) f += ` AND agent = '${agentName}'`
+      const records = await table.where(f).execute()
+      return records.reduce((sum: number, r: any) => sum + (r.cost || 0), 0)
     } catch {
       return 0
     }
@@ -252,35 +252,35 @@ export class Database {
   // =========================================================================
 
   async registerAgent(name: string): Promise<void> {
-    const table = await this.getTable('agent_registry')
+    const table = await this.getTable('agents')
     try { await table.delete(`name = '${name}'`) } catch {}
     await table.add([{
       name, state: 'running',
-      lastSeen: new Date().toISOString(), bootedAt: new Date().toISOString(),
+      seen: new Date().toISOString(), booted: new Date().toISOString(),
     }])
   }
 
   async updateAgentHeartbeat(name: string): Promise<void> {
-    const table = await this.getTable('agent_registry')
+    const table = await this.getTable('agents')
     try {
       const existing = await table.where(`name = '${name}'`).execute()
       if (existing.length === 0) return
       const record = existing[0]
       await table.delete(`name = '${name}'`)
-      await table.add([{ ...record, lastSeen: new Date().toISOString() }])
+      await table.add([{ ...record, seen: new Date().toISOString() }])
     } catch {}
   }
 
   async unregisterAgent(name: string): Promise<void> {
-    const table = await this.getTable('agent_registry')
+    const table = await this.getTable('agents')
     try { await table.delete(`name = '${name}'`) } catch {}
   }
 
-  async getRegisteredAgents(): Promise<Array<{ name: string; state: string; lastSeen: string }>> {
-    const table = await this.getTable('agent_registry')
+  async getRegisteredAgents(): Promise<Array<{ name: string; state: string; seen: string }>> {
+    const table = await this.getTable('agents')
     try {
       return (await table.where("name != 'system'").execute()).map((r: any) => ({
-        name: r.name, state: r.state, lastSeen: r.lastSeen,
+        name: r.name, state: r.state, seen: r.seen,
       }))
     } catch {
       return []
