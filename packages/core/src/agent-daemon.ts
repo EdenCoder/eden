@@ -73,7 +73,14 @@ export class AgentDaemon {
 
   /** Update the channel ID for broadcasts (set after Discord connects) */
   setChannelId(channelId: string): void {
+    if (!this.config.channelId) {
+      this.logger.info(`Channel ID set: ${channelId}`)
+    }
     this.config.channelId = channelId
+  }
+
+  hasChannelId(): boolean {
+    return !!this.config.channelId
   }
 
   // =========================================================================
@@ -98,20 +105,28 @@ export class AgentDaemon {
     const pending = await this.db.getTodos({ status: 'pending' })
     if (pending.length === 0) return
 
+    this.logger.debug(`${pending.length} pending todo(s), agents loaded: [${Array.from(this.agents.keys()).join(', ')}]`)
+
     for (const todo of pending) {
       // Idempotent — skip if a job is already running for this todo
-      if (await this.db.isJobRunning('todo', todo.id)) continue
-
-      // Skip if dependencies not met
-      if (!(await this.db.areDependenciesMet(todo.id))) continue
-
-      // Skip if agent not found
-      if (!todo.assignee || !this.agents.has(todo.assignee)) {
-        this.logger.warn(`Todo ${todo.id} ("${todo.title}") — agent "${todo.assignee}" not found`)
+      if (await this.db.isJobRunning('todo', todo.id)) {
+        this.logger.debug(`Skip ${todo.id} — job already running`)
         continue
       }
 
-      // Dispatch
+      // Skip if dependencies not met
+      if (!(await this.db.areDependenciesMet(todo.id))) {
+        this.logger.debug(`Skip ${todo.id} — deps not met`)
+        continue
+      }
+
+      // Skip if agent not found
+      if (!todo.assignee || !this.agents.has(todo.assignee)) {
+        this.logger.warn(`Todo ${todo.id} ("${todo.title}") — agent "${todo.assignee}" not found in [${Array.from(this.agents.keys()).join(', ')}]`)
+        continue
+      }
+
+      // Dispatch (fire and forget — runs in background)
       this.dispatchTodo(todo)
     }
   }

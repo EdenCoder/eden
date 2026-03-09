@@ -100,8 +100,20 @@ export class Eden {
     for (const adapter of this.adapters) {
       adapter.onMention('parcae', (message) => {
         this.logger.info(`Orchestrator received mention in ${adapter.name}`)
+        // Auto-set daemon channel from first real message
+        this.daemon.setChannelId(message.channelId)
         this.orchestrator.handleMention(adapter.name, message)
       }, true)
+
+      // Also listen for any message in any channel to capture channelId early
+      adapter.onMessage(
+        { id: '', name: '', platform: adapter.name },
+        (message) => {
+          if (!this.daemon.hasChannelId()) {
+            this.daemon.setChannelId(message.channelId)
+          }
+        }
+      )
     }
     this.logger.info('Orchestrator online')
 
@@ -206,6 +218,23 @@ export class Eden {
         const mod = await import(configPath)
         const agentConfig = mod.default
         if (!agentConfig?.name) throw new Error('Config missing or missing name')
+
+        // Provision core skills into agents/<name>/.agents/skills/
+        const agentSkillsDir = join(agentsPath, entry.name, '.agents', 'skills')
+        await mkdir(agentSkillsDir, { recursive: true })
+        const globalSkillsDir = resolve(process.cwd(), '.agents/skills')
+        const coreAgentSkills = ['eden-todos', 'eden-meetings', 'eden-cron']
+        for (const skillName of coreAgentSkills) {
+          const src = join(globalSkillsDir, skillName)
+          const dst = join(agentSkillsDir, skillName)
+          try {
+            await access(dst)
+          } catch {
+            try {
+              await cp(src, dst, { recursive: true })
+            } catch {}
+          }
+        }
 
         const agent = new WorkerAgent(this.config, agentConfig, this.adapters, this.db, this.skills)
         await agent.boot()
